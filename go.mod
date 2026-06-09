@@ -5,6 +5,7 @@ go 1.26.3
 require (
 	github.com/bradleyfalzon/ghinstallation/v2 v2.18.0
 	github.com/google/go-github/v62 v62.0.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
