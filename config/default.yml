@@ -1,0 +1,19 @@
+# Default reviewer configuration
+# These values are used when a repository does not have .ai-reviewer.yml
+
+skip_drafts: true
+on_synchronize: true
+approve_on_clean: true
+
+max_files: 50
+
+min_severity: "suggestion" # error | warning | suggestion
+
+categories:
+  - bug
+  - security
+  - performance
+  - code-smell
+  - best-practice
+
+ignore_paths: []
