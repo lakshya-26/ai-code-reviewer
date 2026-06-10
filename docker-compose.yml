@@ -1,0 +1,75 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Local development stack
+#
+# Services:
+#   app   — the AI code reviewer (Go server)
+#   llm   — llama.cpp server running Qwen2.5-Coder locally (CPU mode)
+#
+# Quick start:
+#   1. cp .env.example .env && edit .env  (set GitHub App credentials)
+#   2. make download-model                (downloads the GGUF model once)
+#   3. docker compose up
+#
+# The app will be reachable at http://localhost:3000
+# Use ngrok or similar to expose it to GitHub webhooks.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── AI Code Reviewer (Go app) ───────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      # Override AI provider to point at the local llm service.
+      AI_PROVIDER: local
+      LOCAL_LLM_URL: http://llm:8080
+      LOCAL_LLM_MODEL: qwen2.5-coder
+    depends_on:
+      llm:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── llama.cpp server (local LLM) ────────────────────────────────────────────
+  llm:
+    image: ghcr.io/ggerganov/llama.cpp:server
+    command: >
+      -m /models/qwen2.5-coder-7b-instruct-q5_k_m.gguf
+      --host 0.0.0.0
+      --port 8080
+      --ctx-size 8192
+      --threads 4
+      --parallel 2
+      --log-disable
+    volumes:
+      - ./models:/models:ro
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+
+  # ── Optional: use an external API provider instead of local LLM ─────────────
+  # To switch providers, comment out the llm service above and set these env
+  # vars in .env:
+  #
+  #   AI_PROVIDER=openai          OPENAI_API_KEY=sk-...
+  #   AI_PROVIDER=claude          ANTHROPIC_API_KEY=sk-ant-...
+  #   AI_PROVIDER=gemini          GEMINI_API_KEY=AIza...
+  #   AI_PROVIDER=grok            GROK_API_KEY=xai-...
