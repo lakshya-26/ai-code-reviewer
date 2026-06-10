@@ -1,0 +1,218 @@
+package ai
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/ai-code-reviewer/ai-code-reviewer/internal/config"
+)
+
+// ─── Data types ───────────────────────────────────────────────────────────────
+
+// ReviewComment is one issue found by the AI on a specific line of a file.
+// This is the canonical type used throughout the system — all providers parse
+// their responses into this shape.
+type ReviewComment struct {
+	Line     int    `json:"line"`
+	Severity string `json:"severity"` // error | warning | suggestion
+	Category string `json:"category"` // bug | security | performance | code-smell | best-practice
+	Comment  string `json:"comment"`
+}
+
+// FileReview groups all comments for one file.
+type FileReview struct {
+	Filename string
+	Comments []ReviewComment
+}
+
+// ─── Provider interface ───────────────────────────────────────────────────────
+
+// Provider is the single interface all AI backends implement.
+// The orchestrator (reviewer.go) only talks to this interface.
+type Provider interface {
+	// AnalyzeFile sends the diff for one file to the AI and returns comments.
+	// It is the provider's responsibility to build the prompt and parse the response.
+	AnalyzeFile(ctx context.Context, filename, patch string) ([]ReviewComment, error)
+
+	// Name returns a human-readable label used in logging.
+	Name() string
+}
+
+// ─── Factory ──────────────────────────────────────────────────────────────────
+
+// NewProvider constructs the appropriate Provider based on cfg.AIProvider.
+// Returns an error if the required credentials are missing or the provider
+// name is unknown.
+func NewProvider(cfg *config.Config) (Provider, error) {
+	timeout := time.Duration(cfg.AITimeout) * time.Second
+
+	switch cfg.AIProvider {
+	case config.ProviderLocal:
+		return newOpenAICompatProvider(openAICompatConfig{
+			name:      "local-llm (llama.cpp)",
+			baseURL:   strings.TrimRight(cfg.LocalLLMURL, "/") + "/v1/chat/completions",
+			apiKey:    "local", // llama.cpp server accepts any non-empty key
+			model:     cfg.LocalLLMModel,
+			maxTokens: cfg.AIMaxTokens,
+			timeout:   timeout,
+		}), nil
+
+	case config.ProviderOpenAI:
+		return newOpenAICompatProvider(openAICompatConfig{
+			name:      "openai",
+			baseURL:   "https://api.openai.com/v1/chat/completions",
+			apiKey:    cfg.OpenAIAPIKey,
+			model:     cfg.OpenAIModel,
+			maxTokens: cfg.AIMaxTokens,
+			timeout:   timeout,
+		}), nil
+
+	case config.ProviderGrok:
+		return newOpenAICompatProvider(openAICompatConfig{
+			name:      "grok",
+			baseURL:   "https://api.x.ai/v1/chat/completions",
+			apiKey:    cfg.GrokAPIKey,
+			model:     cfg.GrokModel,
+			maxTokens: cfg.AIMaxTokens,
+			timeout:   timeout,
+		}), nil
+
+	case config.ProviderClaude:
+		return newClaudeProvider(cfg.AnthropicAPIKey, cfg.AnthropicModel, cfg.AIMaxTokens, timeout), nil
+
+	case config.ProviderGemini:
+		return newGeminiProvider(cfg.GeminiAPIKey, cfg.GeminiModel, cfg.AIMaxTokens, timeout), nil
+
+	default:
+		return nil, fmt.Errorf("unknown AI provider %q", cfg.AIProvider)
+	}
+}
+
+// ─── Response parsing (shared) ────────────────────────────────────────────────
+
+// parseJSONComments parses the raw text response from any AI provider into
+// a validated slice of ReviewComments. It handles:
+//   - Markdown code-fenced JSON (```json ... ```)
+//   - Plain JSON arrays
+//   - Empty arrays (valid — no issues found)
+//   - Non-JSON responses (logged, returns nil)
+func parseJSONComments(raw, filename, providerName string) []ReviewComment {
+	text := strings.TrimSpace(raw)
+
+	// Strip markdown code fences that some models wrap their JSON in.
+	if strings.HasPrefix(text, "```") {
+		text = strings.TrimPrefix(text, "```json")
+		text = strings.TrimPrefix(text, "```")
+		if idx := strings.LastIndex(text, "```"); idx != -1 {
+			text = text[:idx]
+		}
+		text = strings.TrimSpace(text)
+	}
+
+	if text == "" || text == "[]" {
+		return nil
+	}
+
+	var comments []ReviewComment
+	if err := json.Unmarshal([]byte(text), &comments); err != nil {
+		preview := text
+		if len(preview) > 300 {
+			preview = preview[:300] + "..."
+		}
+		slog.Warn("AI returned non-JSON response",
+			"provider", providerName,
+			"file", filename,
+			"preview", preview,
+		)
+		return nil
+	}
+
+	return validateComments(comments)
+}
+
+// validateComments removes malformed entries and normalises field values.
+func validateComments(comments []ReviewComment) []ReviewComment {
+	valid := make([]ReviewComment, 0, len(comments))
+	for _, c := range comments {
+		if c.Line <= 0 {
+			continue // hallucinated or invalid line number
+		}
+		if strings.TrimSpace(c.Comment) == "" {
+			continue // empty comment body
+		}
+		if !isValidSeverity(c.Severity) {
+			c.Severity = "suggestion"
+		}
+		if !isValidCategory(c.Category) {
+			c.Category = "best-practice"
+		}
+		c.Comment = strings.TrimSpace(c.Comment)
+		valid = append(valid, c)
+	}
+	return valid
+}
+
+func isValidSeverity(s string) bool {
+	return s == "error" || s == "warning" || s == "suggestion"
+}
+
+func isValidCategory(s string) bool {
+	switch s {
+	case "bug", "security", "performance", "code-smell", "best-practice":
+		return true
+	}
+	return false
+}
+
+// ─── Retry helper ─────────────────────────────────────────────────────────────
+
+// retryableError signals that the operation should be retried.
+type retryableError struct{ cause error }
+
+func (e *retryableError) Error() string { return e.cause.Error() }
+func (e *retryableError) Unwrap() error { return e.cause }
+
+// withRetry calls fn up to maxAttempts times with exponential backoff (1s, 2s, 4s).
+// fn should return a *retryableError to trigger a retry; any other error stops immediately.
+func withRetry(ctx context.Context, maxAttempts int, fn func() error) error {
+	var lastErr error
+	for i := range maxAttempts {
+		lastErr = fn()
+		if lastErr == nil {
+			return nil
+		}
+
+		// Only retry on retryable errors.
+		var re *retryableError
+		isRetryable := false
+		if e, ok := lastErr.(*retryableError); ok {
+			re = e
+			isRetryable = true
+		}
+		_ = re
+
+		if !isRetryable {
+			return lastErr
+		}
+
+		if i < maxAttempts-1 {
+			wait := time.Duration(1<<i) * time.Second // 1s, 2s, 4s
+			slog.Warn("AI call failed, retrying",
+				"attempt", i+1,
+				"max", maxAttempts,
+				"wait", wait,
+				"err", lastErr,
+			)
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	return lastErr
+}
