@@ -1,0 +1,70 @@
+# render.yaml — Deploy to Render.com with one click
+# https://render.com/docs/blueprint-spec
+#
+# Usage:
+#   1. Push this repo to GitHub.
+#   2. Go to https://dashboard.render.com → New → Blueprint.
+#   3. Connect your repo — Render reads this file automatically.
+#   4. Fill in the environment variables marked [REQUIRED] in the Render dashboard.
+
+services:
+  - type: web
+    name: ai-code-reviewer
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter          # upgrade to standard for more RAM / CPU
+    region: oregon         # pick the region closest to your GitHub App webhook origin
+
+    healthCheckPath: /health
+
+    envVars:
+      # ── GitHub App ───────────────────────────────────────────────────────────
+      - key: GITHUB_APP_ID
+        sync: false        # [REQUIRED] — fill in Render dashboard
+
+      - key: GITHUB_APP_PRIVATE_KEY_CONTENTS
+        sync: false        # [REQUIRED] — paste full .pem content, replace newlines with \n
+
+      - key: GITHUB_WEBHOOK_SECRET
+        sync: false        # [REQUIRED] — random string, matches GitHub App setting
+
+      # ── AI Provider ──────────────────────────────────────────────────────────
+      # Choose one block and fill in the key. Default is "local" but Render
+      # doesn't run llama.cpp, so pick an external provider here.
+      - key: AI_PROVIDER
+        value: openai      # change to: claude | gemini | grok
+
+      - key: OPENAI_API_KEY
+        sync: false        # [REQUIRED if AI_PROVIDER=openai]
+
+      # - key: ANTHROPIC_API_KEY
+      #   sync: false      # [REQUIRED if AI_PROVIDER=claude]
+
+      # - key: GEMINI_API_KEY
+      #   sync: false      # [REQUIRED if AI_PROVIDER=gemini]
+
+      # - key: GROK_API_KEY
+      #   sync: false      # [REQUIRED if AI_PROVIDER=grok]
+
+      # ── Server ───────────────────────────────────────────────────────────────
+      - key: PORT
+        value: "3000"
+
+      - key: ENV
+        value: production
+
+      # ── Tuning (optional) ─────────────────────────────────────────────────
+      - key: WORKER_COUNT
+        value: "5"
+
+      - key: MAX_FILES_PER_PR
+        value: "50"
+
+      - key: MAX_PATCH_CHARS
+        value: "10000"
+
+      - key: AI_MAX_TOKENS
+        value: "4096"
+
+      - key: AI_TIMEOUT_SECONDS
+        value: "120"

@@ -1,2 +1,32 @@
-vendor
+# Go build artefacts
+reviewer
+*.test
+coverage.out
+
+# Vendor directory (committed separately via go mod vendor)
+# Remove this line if you want to commit vendor/
+vendor/
+
+# Environment & secrets — NEVER commit these
 .env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Models — too large for git (download via make download-model)
+models/*.gguf
+models/*.bin
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Temp
+/tmp/

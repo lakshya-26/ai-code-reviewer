@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+
+# Local environment files — never bake secrets into an image
+.env
+.env.*
+*.pem
+*.key
+*.p12
+
+# Development / editor
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Test output
+coverage.out
+*.test
+
+# Build artefacts
+/reviewer
+/tmp/
+
+# Documentation
+IMPLEMENTATION.md
+*.md
+
+# Models directory — too large for an image
+models/
+
+# Docker files themselves (not needed inside the image)
+Dockerfile
+docker-compose*.yml
