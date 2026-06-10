@@ -74,7 +74,7 @@ type geminiResponse struct {
 // ─── AnalyzeFile ──────────────────────────────────────────────────────────────
 
 func (p *geminiProvider) AnalyzeFile(ctx context.Context, filename, patch string) ([]ReviewComment, error) {
-	prompt := buildPromptPlaceholder(filename, patch)
+	prompt, _ := BuildPrompt(filename, patch, 0)
 
 	var comments []ReviewComment
 	err := withRetry(ctx, 3, func() error {
