@@ -11,6 +11,7 @@ import (
 	"time"
 )
 
+
 // openAICompatProvider handles any API that speaks OpenAI's chat completions format.
 // This covers: local llama.cpp server, OpenAI, and xAI Grok — all three use
 // identical request/response shapes, just different base URLs and auth keys.
@@ -70,7 +71,7 @@ type openAIResponse struct {
 // ─── AnalyzeFile ──────────────────────────────────────────────────────────────
 
 func (p *openAICompatProvider) AnalyzeFile(ctx context.Context, filename, patch string) ([]ReviewComment, error) {
-	prompt := buildPromptPlaceholder(filename, patch)
+	prompt, _ := BuildPrompt(filename, patch, 0)
 
 	var comments []ReviewComment
 	err := withRetry(ctx, 3, func() error {
@@ -152,18 +153,6 @@ func (p *openAICompatProvider) callAPI(ctx context.Context, prompt string) (stri
 	}
 
 	return apiResp.Choices[0].Message.Content, nil
-}
-
-// ─── Prompt placeholder (replaced in Phase 7) ─────────────────────────────────
-
-// buildPromptPlaceholder is a minimal stub so Phase 6 compiles independently.
-// Phase 7 (prompt.go) will define the real BuildPrompt function that all
-// providers call. This function will be replaced when that file is added.
-func buildPromptPlaceholder(filename, patch string) string {
-	return fmt.Sprintf(
-		"Review this code diff for file %s and return a JSON array of issues.\n\nDiff:\n%s\n\nReturn only a JSON array.",
-		filename, patch,
-	)
 }
 
 // truncate shortens a string to n characters, appending "..." if trimmed.
