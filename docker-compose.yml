@@ -1,20 +1,43 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Local development stack
 #
-# The Go app runs in Docker.
-# llama.cpp runs NATIVELY on the host (brew install llama.cpp).
+# The Go app runs in Docker alongside a PostgreSQL database.
+# llama.cpp runs NATIVELY on the host (brew install llama.cpp) on port 8080.
 #
-# Quick start:
-#   1. cp .env.example .env && fill in GitHub App credentials
+# Quick start (local LLM):
+#   1. cp .env.example .env && fill in GitHub App credentials + GROQ_API_KEY
 #   2. make download-model
 #   3. make llm          ← terminal 1: starts llama.cpp on host port 8080
-#   4. make up           ← terminal 2: starts the Go app in Docker
+#   4. make up           ← terminal 2: starts Go app + Postgres in Docker
 #   5. make ngrok        ← terminal 3: exposes port 3000 to GitHub
+#
+# Quick start (Groq / external API — no local LLM needed):
+#   1. cp .env.example .env && fill in GitHub App creds + GROQ_API_KEY
+#   2. Remove AI_PROVIDER override below (or set it to groq)
+#   3. make up
+#   4. make ngrok
 #
 # host.docker.internal resolves to the host machine from inside the container.
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
+
+  # ── PostgreSQL (usage tracking + per-installation config) ───────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: diffsense
+      POSTGRES_USER: diffsense
+      POSTGRES_PASSWORD: diffsense_local
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U diffsense"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   # ── AI Code Reviewer (Go app) ───────────────────────────────────────────────
   app:
@@ -26,13 +49,18 @@ services:
     env_file:
       - .env
     environment:
-      AI_PROVIDER: local
-      # host.docker.internal → resolves to your Mac from inside the container
-      LOCAL_LLM_URL: http://host.docker.internal:8080
-      LOCAL_LLM_MODEL: qwen2.5-coder
+      # DATABASE_URL points to the local Postgres service.
+      # AI provider comes from .env — set AI_PROVIDER=local there to use llama.cpp,
+      # or AI_PROVIDER=groq (+ GROQ_API_KEY) to use Groq without running llama.cpp.
+      DATABASE_URL: postgresql://diffsense:diffsense_local@postgres:5432/diffsense?sslmode=disable
+      # Uncomment to force local LLM (requires: make llm running in a separate terminal):
+      # AI_PROVIDER: local
+      # LOCAL_LLM_URL: http://host.docker.internal:8080
     volumes:
-      # Mount the private key file into the container at the same relative path
       - ./diffsense-ai.2026-06-12.private-key.pem:/app/diffsense-ai.2026-06-12.private-key.pem:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
@@ -40,9 +68,5 @@ services:
       timeout: 5s
       retries: 3
 
-  # ── To use an external API provider instead of local LLM ────────────────────
-  # Set in .env:
-  #   AI_PROVIDER=openai          OPENAI_API_KEY=sk-...
-  #   AI_PROVIDER=claude          ANTHROPIC_API_KEY=sk-ant-...
-  #   AI_PROVIDER=gemini          GEMINI_API_KEY=AIza...
-  #   AI_PROVIDER=grok            GROK_API_KEY=xai-...
+volumes:
+  postgres_data:

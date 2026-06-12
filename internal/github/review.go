@@ -204,6 +204,18 @@ func countFilesWithComments(reviews []ai.FileReview) int {
 	return count
 }
 
+// PostIssueComment posts a plain (non-review) comment on a pull request.
+// Used for system messages like "free limit reached".
+func PostIssueComment(ctx context.Context, client *github.Client, owner, repo string, prNumber int, body string) error {
+	_, _, err := client.Issues.CreateComment(ctx, owner, repo, prNumber, &github.IssueComment{
+		Body: github.String(truncateString(body, maxCommentBodyBytes)),
+	})
+	if err != nil {
+		return fmt.Errorf("posting issue comment: %w", err)
+	}
+	return nil
+}
+
 // truncateString shortens s to at most maxBytes bytes (not runes), cutting on a
 // valid UTF-8 boundary and appending "… (truncated)" if it was shortened.
 func truncateString(s string, maxBytes int) string {

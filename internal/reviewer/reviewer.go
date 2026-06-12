@@ -13,26 +13,38 @@ import (
 	"github.com/ai-code-reviewer/ai-code-reviewer/internal/filter"
 	githubmodels "github.com/ai-code-reviewer/ai-code-reviewer/internal/github"
 	"github.com/ai-code-reviewer/ai-code-reviewer/internal/parser"
+	"github.com/ai-code-reviewer/ai-code-reviewer/internal/storage"
 )
 
 // interFileDelay spaces out AI calls to avoid bursting the provider's rate limit.
 const interFileDelay = 100 * time.Millisecond
 
+// Store is the subset of storage.Store used by the Reviewer.
+// nil is valid — when nil, per-installation config and usage tracking are disabled
+// and all reviews use the server-default provider.
+type Store interface {
+	GetOrCreate(ctx context.Context, installationID int64, accountLogin string) (*storage.Installation, error)
+	IncrementUsage(ctx context.Context, installationID int64) error
+	DecryptAPIKey(inst *storage.Installation) (string, error)
+}
+
 // Reviewer orchestrates the full review pipeline for one pull request.
 // It is the single component that knows about all other packages — all others
 // are isolated and unaware of each other.
 type Reviewer struct {
-	cache    *cache.ClientCache
-	provider ai.Provider
-	cfg      *config.Config
+	cache           *cache.ClientCache
+	defaultProvider ai.Provider
+	cfg             *config.Config
+	store           Store // nil when DATABASE_URL is not configured
 }
 
-// New creates a Reviewer. All three dependencies are required.
-func New(clientCache *cache.ClientCache, provider ai.Provider, cfg *config.Config) *Reviewer {
+// New creates a Reviewer. store may be nil (disables per-installation config).
+func New(clientCache *cache.ClientCache, provider ai.Provider, cfg *config.Config, store Store) *Reviewer {
 	return &Reviewer{
-		cache:    clientCache,
-		provider: provider,
-		cfg:      cfg,
+		cache:           clientCache,
+		defaultProvider: provider,
+		cfg:             cfg,
+		store:           store,
 	}
 }
 
@@ -58,7 +70,6 @@ func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEve
 	log := slog.With(
 		"repo", repo.FullName,
 		"pr", prNumber,
-		"provider", r.provider.Name(),
 	)
 
 	// ── 1. Early-exit checks ──────────────────────────────────────────────────
@@ -90,6 +101,28 @@ func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEve
 	client, err := r.cache.Get(event.Installation.ID)
 	if err != nil {
 		return fmt.Errorf("getting github client for installation %d: %w", event.Installation.ID, err)
+	}
+
+	// ── 2b. Per-installation AI provider ─────────────────────────────────────
+
+	// Pick the AI provider for this installation.
+	// With a database: check for a user-configured key; enforce the free limit.
+	// Without a database: always use the server default.
+	provider, limitReached, err := r.resolveProvider(ctx, event, log)
+	if err != nil {
+		return fmt.Errorf("resolving AI provider: %w", err)
+	}
+	if limitReached {
+		// Post a friendly "limit reached" comment on the PR and stop.
+		msg := fmt.Sprintf(
+			"## DiffSense AI — Free Review Limit Reached\n\n"+
+				"This installation has used all **%d free reviews**.\n\n"+
+				"To continue receiving AI code reviews, please add your own API key:\n\n"+
+				"👉 **[Configure your API key](https://diffsense-ai.up.railway.app/setup?installation_id=%d)**\n\n"+
+				"Supported providers: Groq (free tier), OpenAI, Anthropic Claude, Google Gemini, xAI Grok.",
+			r.cfg.FreeReviewsLimit, event.Installation.ID,
+		)
+		return githubmodels.PostIssueComment(ctx, client, owner, repoName, prNumber, msg)
 	}
 
 	// ── 3. Per-repo config ────────────────────────────────────────────────────
@@ -193,7 +226,7 @@ func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEve
 		}
 
 		// Call the AI provider — pass PR context for intent-aware review.
-		comments, err := r.provider.AnalyzeFile(ctx, f.Filename, patch, prCtx)
+		comments, err := provider.AnalyzeFile(ctx, f.Filename, patch, prCtx)
 		if err != nil {
 			// Partial success: log and continue with remaining files.
 			fileLog.Error("AI analysis failed — skipping file", "err", err)
@@ -235,14 +268,76 @@ func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEve
 		"files_truncated", truncatedFiles,
 	)
 
+	// Use a fresh context for posting so a cancelled AI context doesn't also
+	// prevent the review from being posted (we still want partial results).
+	postCtx := context.Background()
+
 	if err := githubmodels.PostReview(
-		ctx, client, owner, repoName, prNumber, commitSHA,
+		postCtx, client, owner, repoName, prNumber, commitSHA,
 		fileReviews, repoCfg.ApproveOnClean,
 	); err != nil {
 		return fmt.Errorf("posting review: %w", err)
 	}
 
 	return nil
+}
+
+// resolveProvider picks the right AI provider for this review.
+//
+// Logic:
+//  1. If no DB store is configured, use the server default.
+//  2. Look up (or create) the installation record.
+//  3. If the installation has its own API key, build a provider from it.
+//  4. Otherwise check the free limit — if exceeded, return limitReached=true.
+//  5. If within limit, increment usage and use the server default.
+func (r *Reviewer) resolveProvider(
+	ctx context.Context,
+	event githubmodels.PullRequestEvent,
+	log *slog.Logger,
+) (provider ai.Provider, limitReached bool, err error) {
+	if r.store == nil {
+		return r.defaultProvider, false, nil
+	}
+
+	accountLogin := event.Repository.Owner.Login
+	inst, err := r.store.GetOrCreate(ctx, event.Installation.ID, accountLogin)
+	if err != nil {
+		// Non-fatal: fall back to server default rather than blocking the review.
+		log.Warn("could not load installation config — using server default", "err", err)
+		return r.defaultProvider, false, nil
+	}
+
+	if inst.HasCustomKey() {
+		apiKey, err := r.store.DecryptAPIKey(inst)
+		if err != nil {
+			log.Warn("could not decrypt installation API key — using server default", "err", err)
+			return r.defaultProvider, false, nil
+		}
+		p, err := ai.NewProviderFromInstallation(inst.Provider, apiKey, inst.Model, r.cfg)
+		if err != nil {
+			log.Warn("invalid installation provider config — using server default",
+				"provider", inst.Provider, "err", err)
+			return r.defaultProvider, false, nil
+		}
+		log.Info("using installation API key", "provider", inst.Provider)
+		return p, false, nil
+	}
+
+	// No custom key — check free tier.
+	if inst.IsOverFreeLimit() {
+		log.Warn("installation free review limit reached",
+			"used", inst.FreeReviewsUsed, "limit", inst.FreeReviewsLimit)
+		return nil, true, nil
+	}
+
+	// Within free tier — count this review and use server default.
+	if err := r.store.IncrementUsage(ctx, event.Installation.ID); err != nil {
+		log.Warn("could not increment usage counter", "err", err)
+	}
+	log.Info("using server default provider (free tier)",
+		"provider", r.defaultProvider.Name(),
+		"used", inst.FreeReviewsUsed+1, "limit", inst.FreeReviewsLimit)
+	return r.defaultProvider, false, nil
 }
 
 // applyCategoryAndSeverityFilters removes comments that fall below the repo's
