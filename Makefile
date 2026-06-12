@@ -46,17 +46,18 @@ tidy:
 download-model:
 	bash scripts/download-model.sh
 
-## llm: Start the llama.cpp server directly (model must be downloaded first)
+## llm: Start the llama.cpp server natively (brew install llama.cpp first)
 llm:
 	@if [ ! -f models/qwen2.5-coder-7b-instruct-q5_k_m.gguf ]; then \
 		echo "Model not found. Run: make download-model"; exit 1; \
 	fi
+	@which llama-server > /dev/null 2>&1 || (echo "llama.cpp not found. Run: brew install llama.cpp" && exit 1)
 	llama-server \
 		-m models/qwen2.5-coder-7b-instruct-q5_k_m.gguf \
 		--host 0.0.0.0 \
 		--port 8080 \
 		--ctx-size 8192 \
-		--threads $(shell nproc 2>/dev/null || sysctl -n hw.ncpu) \
+		--threads $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4) \
 		--parallel 2
 
 # ── Docker ────────────────────────────────────────────────────────────────────

@@ -1,19 +1,17 @@
-version: "3.9"
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Local development stack
 #
-# Services:
-#   app   — the AI code reviewer (Go server)
-#   llm   — llama.cpp server running Qwen2.5-Coder locally (CPU mode)
+# The Go app runs in Docker.
+# llama.cpp runs NATIVELY on the host (brew install llama.cpp).
 #
 # Quick start:
-#   1. cp .env.example .env && edit .env  (set GitHub App credentials)
-#   2. make download-model                (downloads the GGUF model once)
-#   3. docker compose up
+#   1. cp .env.example .env && fill in GitHub App credentials
+#   2. make download-model
+#   3. make llm          ← terminal 1: starts llama.cpp on host port 8080
+#   4. make up           ← terminal 2: starts the Go app in Docker
+#   5. make ngrok        ← terminal 3: exposes port 3000 to GitHub
 #
-# The app will be reachable at http://localhost:3000
-# Use ngrok or similar to expose it to GitHub webhooks.
+# host.docker.internal resolves to the host machine from inside the container.
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -28,13 +26,13 @@ services:
     env_file:
       - .env
     environment:
-      # Override AI provider to point at the local llm service.
       AI_PROVIDER: local
-      LOCAL_LLM_URL: http://llm:8080
+      # host.docker.internal → resolves to your Mac from inside the container
+      LOCAL_LLM_URL: http://host.docker.internal:8080
       LOCAL_LLM_MODEL: qwen2.5-coder
-    depends_on:
-      llm:
-        condition: service_healthy
+    volumes:
+      # Mount the private key file into the container at the same relative path
+      - ./diffsense-ai.2026-06-12.private-key.pem:/app/diffsense-ai.2026-06-12.private-key.pem:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
@@ -42,33 +40,8 @@ services:
       timeout: 5s
       retries: 3
 
-  # ── llama.cpp server (local LLM) ────────────────────────────────────────────
-  llm:
-    image: ghcr.io/ggerganov/llama.cpp:server
-    command: >
-      -m /models/qwen2.5-coder-7b-instruct-q5_k_m.gguf
-      --host 0.0.0.0
-      --port 8080
-      --ctx-size 8192
-      --threads 4
-      --parallel 2
-      --log-disable
-    volumes:
-      - ./models:/models:ro
-    ports:
-      - "8080:8080"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
-      interval: 15s
-      timeout: 10s
-      start_period: 30s
-      retries: 5
-
-  # ── Optional: use an external API provider instead of local LLM ─────────────
-  # To switch providers, comment out the llm service above and set these env
-  # vars in .env:
-  #
+  # ── To use an external API provider instead of local LLM ────────────────────
+  # Set in .env:
   #   AI_PROVIDER=openai          OPENAI_API_KEY=sk-...
   #   AI_PROVIDER=claude          ANTHROPIC_API_KEY=sk-ant-...
   #   AI_PROVIDER=gemini          GEMINI_API_KEY=AIza...
