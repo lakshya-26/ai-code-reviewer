@@ -14,9 +14,6 @@ import (
 const geminiAPIBase = "https://generativelanguage.googleapis.com/v1beta/models"
 
 // geminiProvider calls Google's Generative Language API (Gemini).
-// Gemini uses a completely different wire format from OpenAI/Anthropic:
-// the request wraps content in "contents[].parts[].text" and auth is a
-// query-string API key rather than a header.
 type geminiProvider struct {
 	apiKey    string
 	model     string
@@ -38,8 +35,9 @@ func (p *geminiProvider) Name() string { return "gemini" }
 // ─── Gemini wire types ────────────────────────────────────────────────────────
 
 type geminiRequest struct {
-	Contents         []geminiContent  `json:"contents"`
-	GenerationConfig geminiGenConfig  `json:"generationConfig"`
+	SystemInstruction *geminiContent  `json:"system_instruction,omitempty"` // dedicated system prompt field
+	Contents          []geminiContent `json:"contents"`
+	GenerationConfig  geminiGenConfig `json:"generationConfig"`
 }
 
 type geminiContent struct {
@@ -73,8 +71,8 @@ type geminiResponse struct {
 
 // ─── AnalyzeFile ──────────────────────────────────────────────────────────────
 
-func (p *geminiProvider) AnalyzeFile(ctx context.Context, filename, patch string) ([]ReviewComment, error) {
-	prompt, _ := BuildPrompt(filename, patch, 0)
+func (p *geminiProvider) AnalyzeFile(ctx context.Context, filename, patch string, prCtx PRContext) ([]ReviewComment, error) {
+	prompt := BuildPrompt(filename, patch, 0, prCtx)
 
 	var comments []ReviewComment
 	err := withRetry(ctx, 3, func() error {
@@ -97,13 +95,16 @@ func (p *geminiProvider) AnalyzeFile(ctx context.Context, filename, patch string
 	return comments, nil
 }
 
-func (p *geminiProvider) callAPI(ctx context.Context, prompt string) (string, error) {
-	// Gemini URL: /v1beta/models/{model}:generateContent?key={apiKey}
+func (p *geminiProvider) callAPI(ctx context.Context, prompt BuiltPrompt) (string, error) {
 	url := fmt.Sprintf("%s/%s:generateContent?key=%s", geminiAPIBase, p.model, p.apiKey)
 
 	reqBody := geminiRequest{
+		// Gemini's system_instruction field — keeps system context separate from user turn.
+		SystemInstruction: &geminiContent{
+			Parts: []geminiPart{{Text: prompt.System}},
+		},
 		Contents: []geminiContent{
-			{Parts: []geminiPart{{Text: prompt}}},
+			{Parts: []geminiPart{{Text: prompt.User}}},
 		},
 		GenerationConfig: geminiGenConfig{
 			MaxOutputTokens: p.maxTokens,
@@ -152,14 +153,9 @@ func (p *geminiProvider) callAPI(ctx context.Context, prompt string) (string, er
 		return "", fmt.Errorf("API error [%s]: %s", apiResp.Error.Status, apiResp.Error.Message)
 	}
 
-	if len(apiResp.Candidates) == 0 {
+	if len(apiResp.Candidates) == 0 || len(apiResp.Candidates[0].Content.Parts) == 0 {
 		return "", nil
 	}
 
-	parts := apiResp.Candidates[0].Content.Parts
-	if len(parts) == 0 {
-		return "", nil
-	}
-
-	return parts[0].Text, nil
+	return apiResp.Candidates[0].Content.Parts[0].Text, nil
 }
