@@ -186,7 +186,7 @@ func buildSummaryBody(totalIssues, filesReviewed int, reviews []ai.FileReview) s
 		}
 	}
 
-	sb.WriteString("\n<sub>Powered by AI Code Reviewer</sub>")
+	sb.WriteString("\n<sub>Powered by DiffSense AI</sub>")
 
 	return sb.String()
 }
