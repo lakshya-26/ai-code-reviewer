@@ -60,8 +60,14 @@ func main() {
 	clientCache := cache.NewClientCache(cfg.AppID, cfg.PrivateKeyPath)
 
 	// ── Reviewer ──────────────────────────────────────────────────────────────
-	// instStore satisfies reviewer.Store (nil is valid — disables per-install config).
-	rev := reviewer.New(clientCache, provider, cfg, instStore)
+	// Only assign the interface when the concrete store is non-nil.
+	// Passing a typed nil (*storage.Store) as reviewer.Store would produce a
+	// non-nil interface value, causing a nil-pointer panic inside resolveProvider.
+	var revStore reviewer.Store
+	if instStore != nil {
+		revStore = instStore
+	}
+	rev := reviewer.New(clientCache, provider, cfg, revStore)
 
 	// ── Worker pool ───────────────────────────────────────────────────────────
 	pool := worker.NewPool(cfg.WorkerCount, rev, cfg.ReviewTimeoutSeconds)
