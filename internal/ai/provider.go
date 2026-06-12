@@ -72,6 +72,16 @@ func NewProvider(cfg *config.Config) (Provider, error) {
 			timeout:   timeout,
 		}), nil
 
+	case config.ProviderGroq:
+		return newOpenAICompatProvider(openAICompatConfig{
+			name:      "groq",
+			baseURL:   "https://api.groq.com/openai/v1/chat/completions",
+			apiKey:    cfg.GroqAPIKey,
+			model:     cfg.GroqModel,
+			maxTokens: cfg.AIMaxTokens,
+			timeout:   timeout,
+		}), nil
+
 	case config.ProviderOpenAI:
 		return newOpenAICompatProvider(openAICompatConfig{
 			name:      "openai",
@@ -84,7 +94,7 @@ func NewProvider(cfg *config.Config) (Provider, error) {
 
 	case config.ProviderGrok:
 		return newOpenAICompatProvider(openAICompatConfig{
-			name:      "grok",
+			name:      "grok (xAI)",
 			baseURL:   "https://api.x.ai/v1/chat/completions",
 			apiKey:    cfg.GrokAPIKey,
 			model:     cfg.GrokModel,
@@ -101,6 +111,62 @@ func NewProvider(cfg *config.Config) (Provider, error) {
 	default:
 		return nil, fmt.Errorf("unknown AI provider %q", cfg.AIProvider)
 	}
+}
+
+// NewProviderFromInstallation builds a Provider for a specific installation's API key.
+// providerName, apiKey, model are the installation's custom settings.
+// cfg is the server config (for timeout, maxTokens).
+func NewProviderFromInstallation(providerName, apiKey, model string, cfg *config.Config) (Provider, error) {
+	timeout := time.Duration(cfg.AITimeout) * time.Second
+	maxTokens := cfg.AIMaxTokens
+
+	switch config.AIProvider(providerName) {
+	case config.ProviderGroq:
+		return newOpenAICompatProvider(openAICompatConfig{
+			name:      "groq (installation)",
+			baseURL:   "https://api.groq.com/openai/v1/chat/completions",
+			apiKey:    apiKey,
+			model:     orDefault(model, cfg.GroqModel),
+			maxTokens: maxTokens,
+			timeout:   timeout,
+		}), nil
+
+	case config.ProviderOpenAI:
+		return newOpenAICompatProvider(openAICompatConfig{
+			name:      "openai (installation)",
+			baseURL:   "https://api.openai.com/v1/chat/completions",
+			apiKey:    apiKey,
+			model:     orDefault(model, cfg.OpenAIModel),
+			maxTokens: maxTokens,
+			timeout:   timeout,
+		}), nil
+
+	case config.ProviderGrok:
+		return newOpenAICompatProvider(openAICompatConfig{
+			name:      "grok (installation)",
+			baseURL:   "https://api.x.ai/v1/chat/completions",
+			apiKey:    apiKey,
+			model:     orDefault(model, cfg.GrokModel),
+			maxTokens: maxTokens,
+			timeout:   timeout,
+		}), nil
+
+	case config.ProviderClaude:
+		return newClaudeProvider(apiKey, orDefault(model, cfg.AnthropicModel), maxTokens, timeout), nil
+
+	case config.ProviderGemini:
+		return newGeminiProvider(apiKey, orDefault(model, cfg.GeminiModel), maxTokens, timeout), nil
+
+	default:
+		return nil, fmt.Errorf("unknown provider %q in installation config", providerName)
+	}
+}
+
+func orDefault(s, def string) string {
+	if s != "" {
+		return s
+	}
+	return def
 }
 
 // ─── Response parsing (shared) ────────────────────────────────────────────────

@@ -12,11 +12,12 @@ import (
 type AIProvider string
 
 const (
-	ProviderLocal     AIProvider = "local"     // llama.cpp server (default, no key needed)
-	ProviderOpenAI    AIProvider = "openai"
-	ProviderClaude    AIProvider = "claude"
-	ProviderGemini    AIProvider = "gemini"
-	ProviderGrok      AIProvider = "grok"
+	ProviderLocal  AIProvider = "local"  // llama.cpp server (no key needed)
+	ProviderGroq   AIProvider = "groq"   // Groq cloud inference (fast, free tier)
+	ProviderOpenAI AIProvider = "openai"
+	ProviderClaude AIProvider = "claude"
+	ProviderGemini AIProvider = "gemini"
+	ProviderGrok   AIProvider = "grok" // xAI Grok
 )
 
 // Config holds all runtime configuration loaded from environment variables.
@@ -43,6 +44,8 @@ type Config struct {
 	LocalLLMModel string
 
 	// External provider API keys (all optional)
+	GroqAPIKey      string
+	GroqModel       string
 	OpenAIAPIKey    string
 	OpenAIModel     string
 	AnthropicAPIKey string
@@ -55,6 +58,11 @@ type Config struct {
 	// Shared AI settings
 	AIMaxTokens int
 	AITimeout   int // seconds
+
+	// Per-installation config (optional — enables multi-tenant usage tracking)
+	DatabaseURL       string
+	EncryptionKey     string // base64-encoded 32-byte key for AES-256-GCM
+	FreeReviewsLimit  int    // per-installation free tier limit (default 100)
 }
 
 // Load reads configuration from environment variables.
@@ -69,13 +77,15 @@ func Load() *Config {
 		MaxFilesPerPR: getEnvInt("MAX_FILES_PER_PR", 50),
 		MaxPatchChars: getEnvInt("MAX_PATCH_CHARS", 10000),
 
-		AIProvider: AIProvider(strings.ToLower(getEnv("AI_PROVIDER", string(ProviderLocal)))),
+		AIProvider: AIProvider(strings.ToLower(getEnv("AI_PROVIDER", string(ProviderGroq)))),
 
 		// Local LLM defaults
 		LocalLLMURL:   getEnv("LOCAL_LLM_URL", "http://localhost:8080"),
 		LocalLLMModel: getEnv("LOCAL_LLM_MODEL", "qwen2.5-coder"),
 
 		// External API keys (all optional)
+		GroqAPIKey:      getEnv("GROQ_API_KEY", ""),
+		GroqModel:       getEnv("GROQ_MODEL", "llama-3.3-70b-versatile"),
 		OpenAIAPIKey:    getEnv("OPENAI_API_KEY", ""),
 		OpenAIModel:     getEnv("OPENAI_MODEL", "gpt-4o"),
 		AnthropicAPIKey: getEnv("ANTHROPIC_API_KEY", ""),
@@ -87,6 +97,11 @@ func Load() *Config {
 
 		AIMaxTokens: getEnvInt("AI_MAX_TOKENS", 4096),
 		AITimeout:   getEnvInt("AI_TIMEOUT_SECONDS", 120),
+
+		// Multi-tenant (optional)
+		DatabaseURL:      getEnv("DATABASE_URL", ""),
+		EncryptionKey:    getEnv("ENCRYPTION_KEY", ""),
+		FreeReviewsLimit: getEnvInt("FREE_REVIEWS_LIMIT", 100),
 	}
 
 	// GitHub App ID
@@ -136,6 +151,10 @@ func validateProvider(cfg *Config) error {
 		if cfg.LocalLLMURL == "" {
 			return fmt.Errorf("LOCAL_LLM_URL must be set when AI_PROVIDER=local")
 		}
+	case ProviderGroq:
+		if cfg.GroqAPIKey == "" {
+			return fmt.Errorf("GROQ_API_KEY must be set when AI_PROVIDER=groq")
+		}
 	case ProviderOpenAI:
 		if cfg.OpenAIAPIKey == "" {
 			return fmt.Errorf("OPENAI_API_KEY must be set when AI_PROVIDER=openai")
@@ -153,7 +172,7 @@ func validateProvider(cfg *Config) error {
 			return fmt.Errorf("GROK_API_KEY must be set when AI_PROVIDER=grok")
 		}
 	default:
-		return fmt.Errorf("unknown AI_PROVIDER %q — must be one of: local, openai, claude, gemini, grok", cfg.AIProvider)
+		return fmt.Errorf("unknown AI_PROVIDER %q — must be one of: local, groq, openai, claude, gemini, grok", cfg.AIProvider)
 	}
 	return nil
 }
