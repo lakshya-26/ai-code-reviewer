@@ -114,14 +114,19 @@ func Load() *Config {
 	}
 	cfg.AppID = appID
 
-	// Private key — accept either file path or raw PEM content
+	// Private key — accept either a file path or raw PEM content.
+	// GITHUB_APP_PRIVATE_KEY_CONTENTS takes priority.
+	// If GITHUB_APP_PRIVATE_KEY_PATH contains PEM content (starts with "-----BEGIN"),
+	// we treat it as inline content so misconfiguration is handled gracefully.
 	keyPath := getEnv("GITHUB_APP_PRIVATE_KEY_PATH", "")
 	keyContents := getEnv("GITHUB_APP_PRIVATE_KEY_CONTENTS", "")
 	switch {
 	case keyContents != "":
-		// Raw PEM content from env (Railway/Render style)
-		// Replace literal \n with actual newlines
+		// Replace literal \n with actual newlines (Railway/Render env var style).
 		cfg.PrivateKeyPath = strings.ReplaceAll(keyContents, `\n`, "\n")
+	case strings.HasPrefix(strings.TrimSpace(keyPath), "-----BEGIN"):
+		// Caller put PEM content into the PATH variable — accept it anyway.
+		cfg.PrivateKeyPath = strings.ReplaceAll(keyPath, `\n`, "\n")
 	case keyPath != "":
 		if _, err := os.Stat(keyPath); err != nil {
 			fatalf("private key file not found at %s: %v", keyPath, err)

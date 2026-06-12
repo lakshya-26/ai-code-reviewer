@@ -48,8 +48,9 @@ USER reviewer
 
 EXPOSE 3000
 
-# HEALTHCHECK lets Docker / Railway / Render know when the container is ready.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -qO- http://localhost:3000/health || exit 1
+# HEALTHCHECK uses $PORT so it works with Railway's dynamic port assignment.
+# Railway overrides PORT at runtime; default 3000 is used locally.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD wget -qO- http://localhost:${PORT:-3000}/health || exit 1
 
 CMD ["./reviewer"]
