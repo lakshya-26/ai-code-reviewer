@@ -54,7 +54,7 @@ func PostReview(
 		} else {
 			event = "COMMENT"
 		}
-		body = "✅ **AI Code Review**: No issues found. Looks good to merge."
+		body = "✅ **DiffSense AI Code Review**: No issues found. Looks good to merge."
 	} else {
 		event = "COMMENT"
 		body = buildSummaryBody(totalIssues, filesReviewed, fileReviews)
@@ -167,7 +167,7 @@ func buildSummaryBody(totalIssues, filesReviewed int, reviews []ai.FileReview) s
 	}
 
 	var sb strings.Builder
-	sb.WriteString("🤖 **AI Code Review**\n\n")
+	sb.WriteString("🤖 **DiffSense AI Code Review**\n\n")
 	fmt.Fprintf(&sb, "Found **%d %s** across **%d %s**.\n\n", totalIssues, issueWord, filesReviewed, fileWord)
 
 	sb.WriteString("| Severity | Count |\n")
