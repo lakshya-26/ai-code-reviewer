@@ -32,9 +32,10 @@ type Config struct {
 	WebhookSecret  string
 
 	// Worker pool
-	WorkerCount    int
-	MaxFilesPerPR  int
-	MaxPatchChars  int
+	WorkerCount          int
+	MaxFilesPerPR        int
+	MaxPatchChars        int
+	ReviewTimeoutSeconds int // max wall-clock time for one full PR review
 
 	// AI provider selection
 	AIProvider AIProvider
@@ -73,9 +74,10 @@ func Load() *Config {
 		Env:           getEnv("ENV", "production"),
 		WebhookSecret: requireEnv("GITHUB_WEBHOOK_SECRET"),
 
-		WorkerCount:   getEnvInt("WORKER_COUNT", 5),
-		MaxFilesPerPR: getEnvInt("MAX_FILES_PER_PR", 50),
-		MaxPatchChars: getEnvInt("MAX_PATCH_CHARS", 10000),
+		WorkerCount:          getEnvInt("WORKER_COUNT", 5),
+		MaxFilesPerPR:        getEnvInt("MAX_FILES_PER_PR", 50),
+		MaxPatchChars:        getEnvInt("MAX_PATCH_CHARS", 10000),
+		ReviewTimeoutSeconds: getEnvInt("REVIEW_TIMEOUT_SECONDS", 1200), // 20 min default
 
 		AIProvider: AIProvider(strings.ToLower(getEnv("AI_PROVIDER", string(ProviderGroq)))),
 

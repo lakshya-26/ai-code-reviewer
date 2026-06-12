@@ -30,7 +30,7 @@ services:
       POSTGRES_USER: diffsense
       POSTGRES_PASSWORD: diffsense_local
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -49,12 +49,13 @@ services:
     env_file:
       - .env
     environment:
-      # Override with local LLM for dev — remove to use what's in .env (e.g. groq)
-      AI_PROVIDER: local
-      LOCAL_LLM_URL: http://host.docker.internal:8080
-      LOCAL_LLM_MODEL: qwen2.5-coder
-      # Connect to the local Postgres service
+      # DATABASE_URL points to the local Postgres service.
+      # AI provider comes from .env — set AI_PROVIDER=local there to use llama.cpp,
+      # or AI_PROVIDER=groq (+ GROQ_API_KEY) to use Groq without running llama.cpp.
       DATABASE_URL: postgresql://diffsense:diffsense_local@postgres:5432/diffsense?sslmode=disable
+      # Uncomment to force local LLM (requires: make llm running in a separate terminal):
+      # AI_PROVIDER: local
+      # LOCAL_LLM_URL: http://host.docker.internal:8080
     volumes:
       - ./diffsense-ai.2026-06-12.private-key.pem:/app/diffsense-ai.2026-06-12.private-key.pem:ro
     depends_on:

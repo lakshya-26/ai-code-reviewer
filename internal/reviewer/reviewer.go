@@ -268,8 +268,12 @@ func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEve
 		"files_truncated", truncatedFiles,
 	)
 
+	// Use a fresh context for posting so a cancelled AI context doesn't also
+	// prevent the review from being posted (we still want partial results).
+	postCtx := context.Background()
+
 	if err := githubmodels.PostReview(
-		ctx, client, owner, repoName, prNumber, commitSHA,
+		postCtx, client, owner, repoName, prNumber, commitSHA,
 		fileReviews, repoCfg.ApproveOnClean,
 	); err != nil {
 		return fmt.Errorf("posting review: %w", err)

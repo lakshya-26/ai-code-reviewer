@@ -64,7 +64,7 @@ func main() {
 	rev := reviewer.New(clientCache, provider, cfg, instStore)
 
 	// ── Worker pool ───────────────────────────────────────────────────────────
-	pool := worker.NewPool(cfg.WorkerCount, rev)
+	pool := worker.NewPool(cfg.WorkerCount, rev, cfg.ReviewTimeoutSeconds)
 	pool.Start()
 
 	// ── HTTP server ───────────────────────────────────────────────────────────

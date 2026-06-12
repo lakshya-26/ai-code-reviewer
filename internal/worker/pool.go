@@ -9,10 +9,6 @@ import (
 	githubmodels "github.com/ai-code-reviewer/ai-code-reviewer/internal/github"
 )
 
-// reviewTimeout is the maximum time allowed to fully process one PR.
-// A review involves fetching files, calling the AI per file, and posting results.
-const reviewTimeout = 5 * time.Minute
-
 // jobQueueBuffer is how many PR events can be queued before Submit starts
 // dropping. This absorbs bursts without blocking the webhook HTTP handler.
 const jobQueueBuffer = 100
@@ -30,20 +26,24 @@ type Reviewer interface {
 //   - Fixed worker count — no goroutine per event, bounded concurrency
 //   - Buffered channel — absorbs bursts, non-blocking Submit
 //   - Drop on full queue — better to miss a review than to block the webhook
-//   - 5-minute context per job — prevents a stuck AI call from leaking a goroutine
+//   - Configurable context timeout per job — prevents a stuck AI call from
+//     leaking a goroutine (default 20 min; local LLM needs more than 5 min)
 type Pool struct {
-	jobs     chan githubmodels.PullRequestEvent
-	workers  int
-	reviewer Reviewer
-	wg       sync.WaitGroup
+	jobs          chan githubmodels.PullRequestEvent
+	workers       int
+	reviewer      Reviewer
+	reviewTimeout time.Duration
+	wg            sync.WaitGroup
 }
 
 // NewPool creates a worker pool. Call Start() to launch the goroutines.
-func NewPool(workerCount int, reviewer Reviewer) *Pool {
+// reviewTimeoutSeconds is the max wall-clock seconds allowed per PR review.
+func NewPool(workerCount int, reviewer Reviewer, reviewTimeoutSeconds int) *Pool {
 	return &Pool{
-		jobs:     make(chan githubmodels.PullRequestEvent, jobQueueBuffer),
-		workers:  workerCount,
-		reviewer: reviewer,
+		jobs:          make(chan githubmodels.PullRequestEvent, jobQueueBuffer),
+		workers:       workerCount,
+		reviewer:      reviewer,
+		reviewTimeout: time.Duration(reviewTimeoutSeconds) * time.Second,
 	}
 }
 
@@ -90,7 +90,7 @@ func (p *Pool) runWorker(id int) {
 }
 
 func (p *Pool) processEvent(workerID int, event githubmodels.PullRequestEvent) {
-	ctx, cancel := context.WithTimeout(context.Background(), reviewTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), p.reviewTimeout)
 	defer cancel()
 
 	start := time.Now()
