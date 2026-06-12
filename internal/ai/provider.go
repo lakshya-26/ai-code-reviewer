@@ -29,14 +29,25 @@ type FileReview struct {
 	Comments []ReviewComment
 }
 
+// ─── PR context ───────────────────────────────────────────────────────────────
+
+// PRContext carries pull request metadata that gives the AI reviewer
+// context about the intent of the change — letting it focus on what matters.
+type PRContext struct {
+	Title       string // PR title, e.g. "Fix auth token expiry"
+	Description string // PR body / description
+	Number      int
+	RepoName    string // e.g. "acme/backend"
+}
+
 // ─── Provider interface ───────────────────────────────────────────────────────
 
 // Provider is the single interface all AI backends implement.
 // The orchestrator (reviewer.go) only talks to this interface.
 type Provider interface {
 	// AnalyzeFile sends the diff for one file to the AI and returns comments.
-	// It is the provider's responsibility to build the prompt and parse the response.
-	AnalyzeFile(ctx context.Context, filename, patch string) ([]ReviewComment, error)
+	// prCtx provides PR-level context so the model can focus its review.
+	AnalyzeFile(ctx context.Context, filename, patch string, prCtx PRContext) ([]ReviewComment, error)
 
 	// Name returns a human-readable label used in logging.
 	Name() string
@@ -98,20 +109,38 @@ func NewProvider(cfg *config.Config) (Provider, error) {
 // a validated slice of ReviewComments. It handles:
 //   - Markdown code-fenced JSON (```json ... ```)
 //   - Plain JSON arrays
+//   - Chain-of-thought output with reasoning before the JSON array
 //   - Empty arrays (valid — no issues found)
 //   - Non-JSON responses (logged, returns nil)
 func parseJSONComments(raw, filename, providerName string) []ReviewComment {
 	text := strings.TrimSpace(raw)
 
 	// Strip markdown code fences that some models wrap their JSON in.
-	if strings.HasPrefix(text, "```") {
-		text = strings.TrimPrefix(text, "```json")
+	if idx := strings.Index(text, "```json"); idx != -1 {
+		text = text[idx+7:]
+		if end := strings.Index(text, "```"); end != -1 {
+			text = text[:end]
+		}
+		text = strings.TrimSpace(text)
+	} else if strings.HasPrefix(text, "```") {
 		text = strings.TrimPrefix(text, "```")
-		if idx := strings.LastIndex(text, "```"); idx != -1 {
-			text = text[:idx]
+		if end := strings.LastIndex(text, "```"); end != -1 {
+			text = text[:end]
 		}
 		text = strings.TrimSpace(text)
 	}
+
+	// Handle chain-of-thought: model may emit reasoning before the JSON array.
+	// Find the first '[' that starts the JSON array.
+	if !strings.HasPrefix(text, "[") {
+		if idx := strings.Index(text, "\n["); idx != -1 {
+			text = text[idx+1:]
+		} else if idx := strings.Index(text, "["); idx != -1 {
+			text = text[idx:]
+		}
+	}
+
+	text = strings.TrimSpace(text)
 
 	if text == "" || text == "[]" {
 		return nil

@@ -12,13 +12,11 @@ import (
 )
 
 const (
-	claudeAPIURL = "https://api.anthropic.com/v1/messages"
+	claudeAPIURL     = "https://api.anthropic.com/v1/messages"
 	claudeAPIVersion = "2023-06-01"
 )
 
 // claudeProvider calls Anthropic's Messages API.
-// Anthropic uses a different wire format from OpenAI — different request shape,
-// different auth headers, and a different response structure.
 type claudeProvider struct {
 	apiKey    string
 	model     string
@@ -40,9 +38,10 @@ func (p *claudeProvider) Name() string { return "claude" }
 // ─── Anthropic wire types ─────────────────────────────────────────────────────
 
 type claudeRequest struct {
-	Model     string           `json:"model"`
-	MaxTokens int              `json:"max_tokens"`
-	Messages  []claudeMessage  `json:"messages"`
+	Model     string         `json:"model"`
+	MaxTokens int            `json:"max_tokens"`
+	System    string         `json:"system"` // Anthropic's dedicated system prompt field
+	Messages  []claudeMessage `json:"messages"`
 }
 
 type claudeMessage struct {
@@ -64,8 +63,8 @@ type claudeResponse struct {
 
 // ─── AnalyzeFile ──────────────────────────────────────────────────────────────
 
-func (p *claudeProvider) AnalyzeFile(ctx context.Context, filename, patch string) ([]ReviewComment, error) {
-	prompt, _ := BuildPrompt(filename, patch, 0)
+func (p *claudeProvider) AnalyzeFile(ctx context.Context, filename, patch string, prCtx PRContext) ([]ReviewComment, error) {
+	prompt := BuildPrompt(filename, patch, 0, prCtx)
 
 	var comments []ReviewComment
 	err := withRetry(ctx, 3, func() error {
@@ -88,12 +87,13 @@ func (p *claudeProvider) AnalyzeFile(ctx context.Context, filename, patch string
 	return comments, nil
 }
 
-func (p *claudeProvider) callAPI(ctx context.Context, prompt string) (string, error) {
+func (p *claudeProvider) callAPI(ctx context.Context, prompt BuiltPrompt) (string, error) {
 	reqBody := claudeRequest{
 		Model:     p.model,
 		MaxTokens: p.maxTokens,
+		System:    prompt.System, // Anthropic puts system prompt in a top-level field
 		Messages: []claudeMessage{
-			{Role: "user", Content: prompt},
+			{Role: "user", Content: prompt.User},
 		},
 	}
 
@@ -127,7 +127,7 @@ func (p *claudeProvider) callAPI(ctx context.Context, prompt string) (string, er
 	if resp.StatusCode == 429 {
 		return "", &retryableError{cause: fmt.Errorf("rate limited (429)")}
 	}
-	if resp.StatusCode == 529 { // Anthropic-specific overload code
+	if resp.StatusCode == 529 {
 		return "", &retryableError{cause: fmt.Errorf("API overloaded (529)")}
 	}
 	if resp.StatusCode >= 400 {

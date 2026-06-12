@@ -11,10 +11,8 @@ import (
 	"time"
 )
 
-
-// openAICompatProvider handles any API that speaks OpenAI's chat completions format.
-// This covers: local llama.cpp server, OpenAI, and xAI Grok — all three use
-// identical request/response shapes, just different base URLs and auth keys.
+// openAICompatProvider handles any API that speaks the OpenAI chat completions format.
+// Covers: local llama.cpp, OpenAI, and xAI Grok.
 type openAICompatProvider struct {
 	cfg    openAICompatConfig
 	client *http.Client
@@ -22,7 +20,7 @@ type openAICompatProvider struct {
 
 type openAICompatConfig struct {
 	name      string
-	baseURL   string // full URL, e.g. https://api.openai.com/v1/chat/completions
+	baseURL   string
 	apiKey    string
 	model     string
 	maxTokens int
@@ -31,10 +29,8 @@ type openAICompatConfig struct {
 
 func newOpenAICompatProvider(cfg openAICompatConfig) *openAICompatProvider {
 	return &openAICompatProvider{
-		cfg: cfg,
-		client: &http.Client{
-			Timeout: cfg.timeout,
-		},
+		cfg:    cfg,
+		client: &http.Client{Timeout: cfg.timeout},
 	}
 }
 
@@ -64,14 +60,13 @@ type openAIResponse struct {
 	Error *struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
-		Code    any    `json:"code"`
 	} `json:"error"`
 }
 
 // ─── AnalyzeFile ──────────────────────────────────────────────────────────────
 
-func (p *openAICompatProvider) AnalyzeFile(ctx context.Context, filename, patch string) ([]ReviewComment, error) {
-	prompt, _ := BuildPrompt(filename, patch, 0)
+func (p *openAICompatProvider) AnalyzeFile(ctx context.Context, filename, patch string, prCtx PRContext) ([]ReviewComment, error) {
+	prompt := BuildPrompt(filename, patch, 0, prCtx)
 
 	var comments []ReviewComment
 	err := withRetry(ctx, 3, func() error {
@@ -94,14 +89,22 @@ func (p *openAICompatProvider) AnalyzeFile(ctx context.Context, filename, patch 
 	return comments, nil
 }
 
-func (p *openAICompatProvider) callAPI(ctx context.Context, prompt string) (string, error) {
+func (p *openAICompatProvider) callAPI(ctx context.Context, prompt BuiltPrompt) (string, error) {
+	// System + user message split — models follow system prompts more reliably.
+	messages := []openAIMessage{
+		{Role: "system", Content: prompt.System},
+		{Role: "user", Content: prompt.User},
+	}
+
+	// Adaptive temperature: security/bug detection benefits from slightly higher
+	// temperature to catch non-obvious issues; JSON formatting stays strict.
+	temperature := 0.1
+
 	reqBody := openAIRequest{
-		Model: p.cfg.model,
-		Messages: []openAIMessage{
-			{Role: "user", Content: prompt},
-		},
+		Model:       p.cfg.model,
+		Messages:    messages,
 		MaxTokens:   p.cfg.maxTokens,
-		Temperature: 0.1, // low temperature = deterministic, less hallucination
+		Temperature: temperature,
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -118,17 +121,15 @@ func (p *openAICompatProvider) callAPI(ctx context.Context, prompt string) (stri
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		// Network errors are retryable.
 		return "", &retryableError{cause: fmt.Errorf("HTTP request failed: %w", err)}
 	}
 	defer resp.Body.Close()
 
-	respBytes, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024)) // 4 MB cap
+	respBytes, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
 	if err != nil {
 		return "", &retryableError{cause: fmt.Errorf("reading response body: %w", err)}
 	}
 
-	// Server errors (5xx) are retryable; client errors (4xx) are not.
 	if resp.StatusCode >= 500 {
 		return "", &retryableError{cause: fmt.Errorf("server error %d: %s", resp.StatusCode, truncate(string(respBytes), 200))}
 	}

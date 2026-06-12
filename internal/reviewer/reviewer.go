@@ -158,6 +158,15 @@ func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEve
 
 	// ── 6. Analyse each file ──────────────────────────────────────────────────
 
+	// Build PR context once — passed to every file analysis so the model
+	// understands the intent of the change.
+	prCtx := ai.PRContext{
+		Title:       pr.Title,
+		Description: pr.Body,
+		Number:      prNumber,
+		RepoName:    repo.FullName,
+	}
+
 	var fileReviews []ai.FileReview
 
 	for i, f := range reviewableFiles {
@@ -183,8 +192,8 @@ func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEve
 			fileLog.Debug("patch truncated", "original_len", len(f.Patch), "truncated_len", len(patch))
 		}
 
-		// Call the AI provider.
-		comments, err := r.provider.AnalyzeFile(ctx, f.Filename, patch)
+		// Call the AI provider — pass PR context for intent-aware review.
+		comments, err := r.provider.AnalyzeFile(ctx, f.Filename, patch, prCtx)
 		if err != nil {
 			// Partial success: log and continue with remaining files.
 			fileLog.Error("AI analysis failed — skipping file", "err", err)
