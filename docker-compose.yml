@@ -48,14 +48,18 @@ services:
       - "3000:3000"
     env_file:
       - .env
+    extra_hosts:
+      # Lets the container reach llama.cpp on the host (make llm).
+      # Docker Desktop already provides this; host-gateway covers Linux.
+      - "host.docker.internal:host-gateway"
     environment:
       # DATABASE_URL points to the local Postgres service.
       # AI provider comes from .env — set AI_PROVIDER=local there to use llama.cpp,
       # or AI_PROVIDER=groq (+ GROQ_API_KEY) to use Groq without running llama.cpp.
       DATABASE_URL: postgresql://diffsense:diffsense_local@postgres:5432/diffsense?sslmode=disable
-      # Uncomment to force local LLM (requires: make llm running in a separate terminal):
-      # AI_PROVIDER: local
-      # LOCAL_LLM_URL: http://host.docker.internal:8080
+      # localhost inside the container is the container itself, not the Mac.
+      # Override .env so Docker can reach llama-server on the host.
+      LOCAL_LLM_URL: http://host.docker.internal:8080
     volumes:
       - ./diffsense-ai.2026-06-12.private-key.pem:/app/diffsense-ai.2026-06-12.private-key.pem:ro
     depends_on:
