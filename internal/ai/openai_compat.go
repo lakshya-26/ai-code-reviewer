@@ -65,8 +65,8 @@ type openAIResponse struct {
 
 // ─── AnalyzeFile ──────────────────────────────────────────────────────────────
 
-func (p *openAICompatProvider) AnalyzeFile(ctx context.Context, filename, patch string, prCtx PRContext) ([]ReviewComment, error) {
-	prompt := BuildPrompt(filename, patch, 0, prCtx)
+func (p *openAICompatProvider) AnalyzeFile(ctx context.Context, in FileAnalysisInput) ([]ReviewComment, error) {
+	prompt := BuildPrompt(in, 0)
 
 	var comments []ReviewComment
 	err := withRetry(ctx, 3, func() error {
@@ -74,16 +74,16 @@ func (p *openAICompatProvider) AnalyzeFile(ctx context.Context, filename, patch 
 		if err != nil {
 			return err
 		}
-		comments = parseJSONComments(raw, filename, p.cfg.name)
+		comments = parseJSONComments(raw, in.Filename, p.cfg.name)
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%s: AnalyzeFile(%s): %w", p.cfg.name, filename, err)
+		return nil, fmt.Errorf("%s: AnalyzeFile(%s): %w", p.cfg.name, in.Filename, err)
 	}
 
 	slog.Debug("AI analysis complete",
 		"provider", p.cfg.name,
-		"file", filename,
+		"file", in.Filename,
 		"comments", len(comments),
 	)
 	return comments, nil

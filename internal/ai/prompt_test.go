@@ -7,15 +7,19 @@ import (
 
 var emptyCtx = PRContext{}
 
+func bp(filename, patch string, max int, ctx PRContext) BuiltPrompt {
+	return BuildPrompt(FileAnalysisInput{Filename: filename, Patch: patch, PRContext: ctx}, max)
+}
+
 func TestBuildPrompt_ContainsFilename(t *testing.T) {
-	p := BuildPrompt("internal/handler.go", "@@ -1 +1 @@\n+code", 0, emptyCtx)
+	p := bp("internal/handler.go", "@@ -1 +1 @@\n+code", 0, emptyCtx)
 	if !strings.Contains(p.User, "internal/handler.go") {
 		t.Error("user prompt should contain the filename")
 	}
 }
 
 func TestBuildPrompt_ContainsLanguage(t *testing.T) {
-	p := BuildPrompt("main.go", "@@ -1 +1 @@\n+code", 0, emptyCtx)
+	p := bp("main.go", "@@ -1 +1 @@\n+code", 0, emptyCtx)
 	if !strings.Contains(p.User, "Go") {
 		t.Error("user prompt should contain the language hint 'Go'")
 	}
@@ -23,7 +27,7 @@ func TestBuildPrompt_ContainsLanguage(t *testing.T) {
 
 func TestBuildPrompt_ContainsPatch(t *testing.T) {
 	patch := "@@ -1 +1 @@\n+myUniqueCode123"
-	p := BuildPrompt("file.py", patch, 0, emptyCtx)
+	p := bp("file.py", patch, 0, emptyCtx)
 	if !strings.Contains(p.User, "myUniqueCode123") {
 		t.Error("user prompt should contain the patch content")
 	}
@@ -31,7 +35,7 @@ func TestBuildPrompt_ContainsPatch(t *testing.T) {
 
 func TestBuildPrompt_Truncation(t *testing.T) {
 	patch := strings.Repeat("+line\n", 1000) // ~6000 chars
-	p := BuildPrompt("file.go", patch, 100, emptyCtx)
+	p := bp("file.go", patch, 100, emptyCtx)
 
 	if !p.Truncated {
 		t.Error("expected truncation flag to be true")
@@ -43,14 +47,14 @@ func TestBuildPrompt_Truncation(t *testing.T) {
 
 func TestBuildPrompt_NoTruncation(t *testing.T) {
 	patch := "@@ -1 +1 @@\n+small"
-	p := BuildPrompt("file.go", patch, 10_000, emptyCtx)
+	p := bp("file.go", patch, 10_000, emptyCtx)
 	if p.Truncated {
 		t.Error("expected no truncation for a small patch")
 	}
 }
 
 func TestBuildPrompt_SystemPromptHasFewShot(t *testing.T) {
-	p := BuildPrompt("file.go", "@@ -1 +1 @@\n+code", 0, emptyCtx)
+	p := bp("file.go", "@@ -1 +1 @@\n+code", 0, emptyCtx)
 	if !strings.Contains(p.System, "SQL injection") {
 		t.Error("system prompt should contain few-shot SQL injection example")
 	}
@@ -60,7 +64,7 @@ func TestBuildPrompt_SystemPromptHasFewShot(t *testing.T) {
 }
 
 func TestBuildPrompt_SystemPromptHasLanguageRules(t *testing.T) {
-	p := BuildPrompt("file.go", "@@ -1 +1 @@\n+code", 0, emptyCtx)
+	p := bp("file.go", "@@ -1 +1 @@\n+code", 0, emptyCtx)
 	if !strings.Contains(p.System, "goroutine") {
 		t.Error("system prompt should contain Go-specific rules")
 	}
@@ -72,7 +76,7 @@ func TestBuildPrompt_PRContextIncluded(t *testing.T) {
 		Description: "This fixes the JWT expiry check",
 		RepoName:    "acme/backend",
 	}
-	p := BuildPrompt("auth/jwt.go", "@@ -1 +1 @@\n+code", 0, ctx)
+	p := bp("auth/jwt.go", "@@ -1 +1 @@\n+code", 0, ctx)
 
 	if !strings.Contains(p.User, "Fix auth token expiry bug") {
 		t.Error("user prompt should contain PR title")
@@ -83,7 +87,7 @@ func TestBuildPrompt_PRContextIncluded(t *testing.T) {
 }
 
 func TestBuildPrompt_PRContextEmpty(t *testing.T) {
-	p := BuildPrompt("file.go", "@@ -1 +1 @@\n+code", 0, emptyCtx)
+	p := bp("file.go", "@@ -1 +1 @@\n+code", 0, emptyCtx)
 	// Should not crash and should not emit empty context headers
 	if strings.Contains(p.User, "PULL REQUEST CONTEXT:") {
 		t.Error("should not include PR context section when ctx is empty")
@@ -91,7 +95,7 @@ func TestBuildPrompt_PRContextEmpty(t *testing.T) {
 }
 
 func TestBuildPrompt_SeparateSystemAndUser(t *testing.T) {
-	p := BuildPrompt("file.go", "@@ -1 +1 @@\n+code", 0, emptyCtx)
+	p := bp("file.go", "@@ -1 +1 @@\n+code", 0, emptyCtx)
 	if p.System == "" {
 		t.Error("system prompt should not be empty")
 	}
@@ -109,7 +113,7 @@ func TestBuildPrompt_SeparateSystemAndUser(t *testing.T) {
 }
 
 func TestBuildPrompt_JSONInstructions(t *testing.T) {
-	p := BuildPrompt("file.go", "@@ -1 +1 @@\n+code", 0, emptyCtx)
+	p := bp("file.go", "@@ -1 +1 @@\n+code", 0, emptyCtx)
 	for _, required := range []string{"line", "severity", "category", "comment"} {
 		if !strings.Contains(p.System, required) {
 			t.Errorf("system prompt missing required JSON schema keyword %q", required)
@@ -188,5 +192,54 @@ func TestParseJSONComments_FencedWithinCoT(t *testing.T) {
 	result := parseJSONComments(raw, "file.go", "test")
 	if len(result) != 1 {
 		t.Fatalf("expected 1 comment, got %d", len(result))
+	}
+}
+
+func TestBuildPrompt_IncludesFileBodyAndGuidelines(t *testing.T) {
+	p := BuildPrompt(FileAnalysisInput{
+		Filename:   "main.go",
+		Patch:      "@@ -1 +1 @@\n+code",
+		FileBody:   "func main() {}",
+		Guidelines: "## CONTRIBUTING.md\nBe kind",
+		RepoMap:    "cmd/server/main.go\ninternal/ai/prompt.go",
+		PathPrompt: "Return JSON only",
+	}, 0)
+	if !strings.Contains(p.User, "func main() {}") {
+		t.Error("user prompt should include file body")
+	}
+	if !strings.Contains(p.User, "Be kind") {
+		t.Error("user prompt should include guidelines")
+	}
+	if !strings.Contains(p.User, "internal/ai/prompt.go") {
+		t.Error("user prompt should include repo map")
+	}
+	if !strings.Contains(p.System, "Return JSON only") {
+		t.Error("system prompt should include path-specific instructions")
+	}
+	if !strings.Contains(p.System, `"fix"`) && !strings.Contains(p.System, "fix") {
+		t.Error("system prompt should mention fix field")
+	}
+}
+
+func TestParseJSONComments_FixField(t *testing.T) {
+	raw := `[{"line":4,"severity":"error","category":"bug","comment":"missing err check","fix":"if err != nil {\n  return err\n}"}]`
+	got := parseJSONComments(raw, "file.go", "test")
+	if len(got) != 1 {
+		t.Fatalf("len=%d", len(got))
+	}
+	if !strings.Contains(got[0].Fix, "return err") {
+		t.Fatalf("fix not parsed: %q", got[0].Fix)
+	}
+}
+
+func TestFenceLanguage(t *testing.T) {
+	if FenceLanguage("internal/foo.go") != "go" {
+		t.Fatalf("got %q", FenceLanguage("internal/foo.go"))
+	}
+	if FenceLanguage("a.ts") != "ts" {
+		t.Fatalf("got %q", FenceLanguage("a.ts"))
+	}
+	if FenceLanguage("x.suggestion") == "suggestion" {
+		t.Fatal("must not use suggestion fence")
 	}
 }

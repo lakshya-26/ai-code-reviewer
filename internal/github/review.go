@@ -124,7 +124,7 @@ func buildDraftComments(fileReviews []ai.FileReview) []*github.DraftReviewCommen
 	var comments []*github.DraftReviewComment
 	for _, fr := range fileReviews {
 		for _, c := range fr.Comments {
-			body := formatCommentBody(c)
+			body := formatCommentBody(c, fr.Filename)
 			comments = append(comments, &github.DraftReviewComment{
 				Path: github.String(fr.Filename),
 				Line: github.Int(c.Line),
@@ -143,9 +143,13 @@ func buildDraftComments(fileReviews []ai.FileReview) []*github.DraftReviewCommen
 //	**[ERROR]** `bug`
 //
 //	nil dereference before the pointer check — add a nil guard before line 12.
-func formatCommentBody(c ai.ReviewComment) string {
+func formatCommentBody(c ai.ReviewComment, filename string) string {
 	severityTag := strings.ToUpper(c.Severity)
 	body := fmt.Sprintf("**[%s]** `%s`\n\n%s", severityTag, c.Category, c.Comment)
+	if strings.TrimSpace(c.Fix) != "" {
+		lang := ai.FenceLanguage(filename)
+		body += fmt.Sprintf("\n\n```%s\n%s\n```", lang, strings.TrimSpace(c.Fix))
+	}
 	return truncateString(body, maxCommentBodyBytes)
 }
 

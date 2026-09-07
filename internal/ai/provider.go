@@ -21,12 +21,25 @@ type ReviewComment struct {
 	Severity string `json:"severity"` // error | warning | suggestion
 	Category string `json:"category"` // bug | security | performance | code-smell | best-practice
 	Comment  string `json:"comment"`
+	Fix      string `json:"fix,omitempty"` // optional corrected snippet for copy-paste
 }
 
 // FileReview groups all comments for one file.
 type FileReview struct {
 	Filename string
 	Comments []ReviewComment
+}
+
+// FileAnalysisInput is everything the model needs to review one file.
+type FileAnalysisInput struct {
+	Filename      string
+	Patch         string
+	FileBody      string // full file or enclosing-function windows
+	Guidelines    string // CONTRIBUTING / AGENTS.md
+	PathPrompt    string // matching .ai-reviewer.yml path_prompts entry
+	RepoMap       string // compact source tree, first review only
+	PRContext     PRContext
+	MaxPatchChars int
 }
 
 // ─── PR context ───────────────────────────────────────────────────────────────
@@ -47,7 +60,7 @@ type PRContext struct {
 type Provider interface {
 	// AnalyzeFile sends the diff for one file to the AI and returns comments.
 	// prCtx provides PR-level context so the model can focus its review.
-	AnalyzeFile(ctx context.Context, filename, patch string, prCtx PRContext) ([]ReviewComment, error)
+	AnalyzeFile(ctx context.Context, in FileAnalysisInput) ([]ReviewComment, error)
 
 	// Name returns a human-readable label used in logging.
 	Name() string
@@ -246,6 +259,7 @@ func validateComments(comments []ReviewComment) []ReviewComment {
 			c.Category = "best-practice"
 		}
 		c.Comment = strings.TrimSpace(c.Comment)
+		c.Fix = strings.TrimSpace(c.Fix)
 		valid = append(valid, c)
 	}
 	return valid

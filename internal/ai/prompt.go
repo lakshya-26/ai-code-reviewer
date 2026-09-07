@@ -19,27 +19,32 @@ type BuiltPrompt struct {
 }
 
 // BuildPrompt constructs the full system + user prompt for one file review.
-func BuildPrompt(filename, patch string, maxPatchChars int, prCtx PRContext) BuiltPrompt {
+// BuildPrompt constructs the full system + user prompt for one file review.
+func BuildPrompt(in FileAnalysisInput, maxPatchChars int) BuiltPrompt {
+	if maxPatchChars <= 0 {
+		maxPatchChars = in.MaxPatchChars
+	}
 	if maxPatchChars <= 0 {
 		maxPatchChars = maxPatchCharsDefault
 	}
 
+	patch := in.Patch
 	truncated := false
 	if len(patch) > maxPatchChars {
 		patch, truncated = TruncatePatch(patch, maxPatchChars)
 	}
 
 	return BuiltPrompt{
-		System:    buildSystemPrompt(),
-		User:      buildUserPrompt(filename, patch, truncated, prCtx),
+		System:    buildSystemPrompt(in.PathPrompt),
+		User:      buildUserPrompt(in, patch, truncated),
 		Truncated: truncated,
 	}
 }
 
 // ─── System prompt ────────────────────────────────────────────────────────────
 
-func buildSystemPrompt() string {
-	return `You are a senior software engineer with 10+ years of experience conducting thorough code reviews across multiple languages and systems. Your reviews are precise, actionable, and focused only on real problems — not style preferences.
+func buildSystemPrompt(pathPrompt string) string {
+	base := `You are a senior software engineer with 10+ years of experience conducting thorough code reviews across multiple languages and systems. Your reviews are precise, actionable, and focused only on real problems — not style preferences.
 
 CORE RULES:
 - Review ONLY added lines (lines starting with + in the diff). Never comment on removed lines (-) or unchanged context lines.
@@ -47,6 +52,7 @@ CORE RULES:
 - Do NOT comment on: code style, formatting, naming conventions, indentation, missing comments, or documentation.
 - Every comment must reference the exact line number of the added line where the issue occurs.
 - Be concise and specific — explain the problem AND how to fix it in one or two sentences.
+- When you know the corrected code, put a short snippet in the optional "fix" field (the snippet only, no markdown fences).
 - If you find no real issues, return an empty array. Silence is better than noise.
 
 WHAT TO CHECK:
@@ -70,7 +76,7 @@ Diff:
 +    query := "SELECT * FROM users WHERE id = " + userID
 +    rows, err := db.Query(query)
 Output:
-[{"line":1,"severity":"error","category":"security","comment":"SQL injection — userID is concatenated directly into the query. An attacker can manipulate the SQL statement. Use a parameterized query: db.Query(\"SELECT * FROM users WHERE id = $1\", userID)"}]
+[{"line":1,"severity":"error","category":"security","comment":"SQL injection — userID is concatenated directly into the query.","fix":"rows, err := db.Query(\"SELECT * FROM users WHERE id = $1\", userID)"}]
 
 Example 2 — Resource leak (best-practice, warning):
 Diff:
@@ -78,7 +84,7 @@ Diff:
 +    if err != nil { return err }
 +    body, _ := io.ReadAll(resp.Body)
 Output:
-[{"line":1,"severity":"warning","category":"best-practice","comment":"HTTP response body is never closed — this leaks the underlying TCP connection. Add: defer resp.Body.Close() immediately after the nil check on err."}]
+[{"line":1,"severity":"warning","category":"best-practice","comment":"HTTP response body is never closed — this leaks the underlying TCP connection.","fix":"resp, err := http.Get(url)\nif err != nil { return err }\ndefer resp.Body.Close()"}]
 
 Example 3 — No issues found:
 Diff:
@@ -90,15 +96,20 @@ Output:
 
 OUTPUT FORMAT:
 Return a JSON array only. No explanation. No markdown. No code fences. Just raw JSON.
-Schema: [{"line":<integer>,"severity":"error"|"warning"|"suggestion","category":"bug"|"security"|"performance"|"code-smell"|"best-practice","comment":"<explanation and fix>"}]`
+Schema: [{"line":<integer>,"severity":"error"|"warning"|"suggestion","category":"bug"|"security"|"performance"|"code-smell"|"best-practice","comment":"<explanation>","fix":"<optional corrected snippet>"}]`
+
+	if strings.TrimSpace(pathPrompt) == "" {
+		return base
+	}
+	return base + "\n\nPATH-SPECIFIC INSTRUCTIONS:\n" + strings.TrimSpace(pathPrompt)
 }
 
 // ─── User prompt ──────────────────────────────────────────────────────────────
 
-func buildUserPrompt(filename, patch string, truncated bool, prCtx PRContext) string {
+func buildUserPrompt(in FileAnalysisInput, patch string, truncated bool) string {
 	var sb strings.Builder
+	prCtx := in.PRContext
 
-	// PR context — helps the model understand the intent of the change.
 	if prCtx.Title != "" || prCtx.RepoName != "" {
 		sb.WriteString("PULL REQUEST CONTEXT:\n")
 		if prCtx.RepoName != "" {
@@ -117,12 +128,29 @@ func buildUserPrompt(filename, patch string, truncated bool, prCtx PRContext) st
 		sb.WriteString("\n")
 	}
 
-	// File context.
-	lang := LanguageHintForFile(filename)
-	fmt.Fprintf(&sb, "FILE: %s\nLANGUAGE: %s\n", filename, lang)
+	if strings.TrimSpace(in.Guidelines) != "" {
+		sb.WriteString("REPO GUIDELINES:\n")
+		sb.WriteString(in.Guidelines)
+		sb.WriteString("\n\n")
+	}
+
+	if strings.TrimSpace(in.RepoMap) != "" {
+		sb.WriteString("REPO MAP (source paths at this commit):\n")
+		sb.WriteString(in.RepoMap)
+		sb.WriteString("\n\n")
+	}
+
+	lang := LanguageHintForFile(in.Filename)
+	fmt.Fprintf(&sb, "FILE: %s\nLANGUAGE: %s\n", in.Filename, lang)
 
 	if truncated {
 		sb.WriteString("NOTE: This diff was truncated due to size. Review only what is shown.\n")
+	}
+
+	if strings.TrimSpace(in.FileBody) != "" {
+		sb.WriteString("\nFILE CONTEXT (for understanding; still review only added diff lines):\n")
+		sb.WriteString(in.FileBody)
+		sb.WriteString("\n")
 	}
 
 	sb.WriteString("\nDIFF (lines starting with + are additions — review only these):\n")
@@ -217,4 +245,22 @@ func LanguageHintForFile(filename string) string {
 		return "Groovy (Jenkinsfile)"
 	}
 	return languageHint(filepath.Ext(filename))
+}
+
+// FenceLanguage is the markdown code-fence tag for a filename (e.g. "go", "ts").
+// Never returns "suggestion".
+func FenceLanguage(filename string) string {
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(filename), "."))
+	if ext == "" || ext == "suggestion" {
+		base := strings.ToLower(filepath.Base(filename))
+		switch base {
+		case "dockerfile":
+			return "dockerfile"
+		case "makefile", "gnumakefile":
+			return "makefile"
+		default:
+			return ""
+		}
+	}
+	return ext
 }

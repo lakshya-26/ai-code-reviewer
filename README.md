@@ -14,7 +14,9 @@ This repo uses DiffSense AI to review its own PRs. Check out real AI reviews sta
 
 ## ✨ Features
 
-- **Inline PR comments** — issues posted directly on the exact line of code
+- **Inline PR comments** — issues posted directly on the exact line of code, with copy-paste fix snippets when the model provides them
+- **Incremental reviews** — later pushes only re-analyze files changed since the last review SHA
+- **GitHub Check Run** — in-progress while reviewing, success/neutral when done
 - **Multi-provider AI** — Groq (free, fast), OpenAI, Anthropic Claude, Google Gemini, xAI Grok, or local LLM
 - **Per-installation API keys** — each user can bring their own key via `/setup` page
 - **100 free reviews** per installation using the shared Groq backend
@@ -66,7 +68,16 @@ ignore_paths:
   - "vendor/**"
   - "*.generated.go"
   - "dist/**"
+path_prompts:
+  - path: "internal/ai/**"
+    prompt: "Return JSON only; do not flag style."
 ```
+
+The bot also reads `CONTRIBUTING.md`, `CONTRIBUTING`, and `AGENTS.md` from the repo (when present) and adds them to the review prompt.
+
+Incremental reviews (only new hunks after the first look at a PR) require `DATABASE_URL` so last-commit SHA and posted comment keys can be stored. Without a database, every push re-reviews the full PR.
+
+A **Checks: Read & Write** GitHub App permission is required for the in-progress / completed Check Run on the commit.
 
 ---
 
@@ -93,7 +104,7 @@ Edit `.env` with your GitHub App credentials.
 
 1. Go to [github.com/settings/apps/new](https://github.com/settings/apps/new)
 2. Set **Webhook URL** to your ngrok URL (step 5): `https://xxxx.ngrok.io/webhook`
-3. Enable permissions: `Pull requests` (Read & Write), `Contents` (Read)
+3. Enable permissions: `Pull requests` (Read & Write), `Contents` (Read), `Checks` (Read & Write)
 4. Subscribe to events: `Pull request`
 5. Generate and download the private key `.pem` file
 
@@ -175,20 +186,22 @@ GitHub PR opened/updated
         │
         ▼
    Reviewer
-   ├── Load per-repo config (.ai-reviewer.yml)
-   ├── Fetch changed files (GitHub API)
+   ├── Start GitHub Check Run (in_progress)
+   ├── Load per-repo config (.ai-reviewer.yml, CONTRIBUTING, AGENTS.md)
+   ├── Fetch changed files (full PR or commits since last reviewed SHA)
    ├── Filter files (vendor, generated, binary...)
    ├── Resolve AI provider (per-installation key or server default)
    │
    └── For each file:
        ├── Parse unified diff → extract added lines
-       ├── Build prompt (system + user + few-shot examples + PR context)
+       ├── Load file / enclosing function + 1-hop relative imports (first review)
+       ├── Build prompt (guidelines + repo map + diff + file context)
        ├── Call AI provider (Groq / OpenAI / Claude / Gemini / local)
-       ├── Parse JSON response
-       └── Validate line numbers against diff
+       ├── Parse JSON (comment + optional copy-paste fix snippet)
+       └── Validate lines; skip comments already posted
         │
         ▼
-   Post single GitHub Review (inline comments + summary)
+   Post GitHub Review → complete Check Run → save last SHA
 ```
 
 ### Tech Stack
@@ -200,7 +213,7 @@ GitHub PR opened/updated
 | Diff parsing | `sourcegraph/go-diff` |
 | Config | `spf13/viper` + `gopkg.in/yaml.v3` |
 | Default AI | Groq (`llama-3.3-70b-versatile`) |
-| Database | PostgreSQL (per-installation config) |
+| Database | PostgreSQL (per-installation config + incremental review memory) |
 | Deployment | Railway |
 
 ---
@@ -227,6 +240,7 @@ FREE_REVIEWS_LIMIT              = 100
 
 6. Set networking port to `3000`
 7. Update your GitHub App's Webhook URL to `https://your-app.up.railway.app/webhook`
+8. Ensure the App has **Checks: Read & Write** (in addition to PRs and Contents)
 
 ---
 
@@ -247,12 +261,15 @@ FREE_REVIEWS_LIMIT              = 100
 │   │   ├── app.go              # App authentication (JWT + installation tokens)
 │   │   ├── webhook.go          # Webhook handler + HMAC verification
 │   │   ├── diff.go             # Fetch PR files
-│   │   └── review.go          # Post PR reviews
+│   │   ├── content.go          # File-at-SHA, git tree, compare commits
+│   │   ├── checks.go           # Check Run start/complete
+│   │   └── review.go           # Post PR reviews
+│   ├── contextx/               # Enclosing-function windows + relative imports
 │   ├── reviewer/reviewer.go    # Main orchestrator
 │   ├── worker/pool.go          # Goroutine worker pool
 │   ├── parser/diff.go          # Unified diff parser
 │   ├── filter/                 # File + config filtering
-│   ├── storage/                # PostgreSQL (per-installation config)
+│   ├── storage/                # PostgreSQL (installations + review memory)
 │   ├── web/setup.go            # /setup settings page
 │   └── cache/token.go          # Installation client cache
 ├── config/default.yml          # Default reviewer settings
