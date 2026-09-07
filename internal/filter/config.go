@@ -3,6 +3,8 @@ package filter
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
+	"strings"
 
 	"github.com/google/go-github/v62/github"
 	"gopkg.in/yaml.v3"
@@ -34,6 +36,15 @@ type RepoConfig struct {
 
 	// IgnorePaths is a list of glob patterns for files/directories to skip.
 	IgnorePaths []string `yaml:"ignore_paths"`
+
+	// PathPrompts are extra system instructions applied to matching files.
+	PathPrompts []PathPrompt `yaml:"path_prompts"`
+}
+
+// PathPrompt attaches extra review instructions to files matching Path.
+type PathPrompt struct {
+	Path   string `yaml:"path"`
+	Prompt string `yaml:"prompt"`
 }
 
 // DefaultRepoConfig returns the baseline configuration used when a repository
@@ -140,6 +151,40 @@ func IsCategoryEnabled(category string, cfg *RepoConfig) bool {
 		if c == category {
 			return true
 		}
+	}
+	return false
+}
+
+// PathPromptFor returns the first matching path_prompts entry for filename.
+func PathPromptFor(filename string, cfg *RepoConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	for _, p := range cfg.PathPrompts {
+		if matchPathPattern(p.Path, filename) {
+			return p.Prompt
+		}
+	}
+	return ""
+}
+
+// matchPathPattern supports filepath.Match plus a trailing "/**" prefix match
+// so patterns like "internal/ai/**" apply to nested files.
+func matchPathPattern(pattern, name string) bool {
+	if pattern == "" {
+		return false
+	}
+	if strings.HasSuffix(pattern, "/**") {
+		prefix := strings.TrimSuffix(pattern, "/**")
+		if name == prefix || strings.HasPrefix(name, prefix+"/") {
+			return true
+		}
+	}
+	if matched, _ := filepath.Match(pattern, name); matched {
+		return true
+	}
+	if matched, _ := filepath.Match(pattern, filepath.Base(name)); matched {
+		return true
 	}
 	return false
 }

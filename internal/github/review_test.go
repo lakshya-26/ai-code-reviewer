@@ -15,7 +15,7 @@ func TestFormatCommentBody_ErrorSeverity(t *testing.T) {
 		Category: "bug",
 		Comment:  "nil dereference — add a nil check before dereferencing ptr",
 	}
-	body := formatCommentBody(c)
+	body := formatCommentBody(c, "handler.go")
 
 	if !strings.Contains(body, "**[ERROR]**") {
 		t.Error("body should contain **[ERROR]**")
@@ -31,7 +31,7 @@ func TestFormatCommentBody_ErrorSeverity(t *testing.T) {
 func TestFormatCommentBody_AllSeverities(t *testing.T) {
 	for _, sev := range []string{"error", "warning", "suggestion"} {
 		c := ai.ReviewComment{Severity: sev, Category: "bug", Comment: "issue", Line: 1}
-		body := formatCommentBody(c)
+		body := formatCommentBody(c, "x.go")
 		tag := "**[" + strings.ToUpper(sev) + "]**"
 		if !strings.Contains(body, tag) {
 			t.Errorf("severity %q: expected %q in body", sev, tag)
@@ -167,5 +167,25 @@ func TestTruncateString_ValidUTF8Boundary(t *testing.T) {
 
 	if !utf8.ValidString(out) {
 		t.Error("truncated string must be valid UTF-8")
+	}
+}
+
+func TestFormatCommentBody_IncludesCopyPasteFence(t *testing.T) {
+	c := ai.ReviewComment{
+		Line:     1,
+		Severity: "error",
+		Category: "bug",
+		Comment:  "check the error",
+		Fix:      "if err != nil {\n\treturn err\n}",
+	}
+	body := formatCommentBody(c, "internal/foo.go")
+	if !strings.Contains(body, "```go") {
+		t.Fatalf("expected go fence, got:\n%s", body)
+	}
+	if strings.Contains(body, "```suggestion") {
+		t.Fatal("must not use GitHub suggestion fences")
+	}
+	if !strings.Contains(body, "return err") {
+		t.Fatal("fix snippet missing")
 	}
 }

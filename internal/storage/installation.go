@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -45,9 +46,17 @@ type Store struct {
 	gcm cipher.AEAD
 }
 
-// NewStore creates a Store. encryptionKey must be a base64-encoded 32-byte key.
-// Generate one with: openssl rand -base64 32
+// NewStore creates a Store.
+//
+// encryptionKeyB64 may be empty: review memory (pr_reviews / posted_comments)
+// still works. Encrypting BYOK API keys requires a base64-encoded 32-byte key
+// (generate with: openssl rand -base64 32).
 func NewStore(db *sql.DB, encryptionKeyB64 string) (*Store, error) {
+	s := &Store{db: db}
+	if strings.TrimSpace(encryptionKeyB64) == "" {
+		return s, nil
+	}
+
 	raw, err := base64.StdEncoding.DecodeString(encryptionKeyB64)
 	if err != nil || len(raw) != 32 {
 		return nil, fmt.Errorf(
@@ -64,7 +73,13 @@ func NewStore(db *sql.DB, encryptionKeyB64 string) (*Store, error) {
 		return nil, fmt.Errorf("creating GCM: %w", err)
 	}
 
-	return &Store{db: db, gcm: gcm}, nil
+	s.gcm = gcm
+	return s, nil
+}
+
+// HasEncryption reports whether API keys can be stored encrypted (BYOK /setup).
+func (s *Store) HasEncryption() bool {
+	return s != nil && s.gcm != nil
 }
 
 // GetOrCreate returns the Installation for the given GitHub installation ID,
@@ -152,6 +167,9 @@ func (s *Store) DecryptAPIKey(inst *Installation) (string, error) {
 // ─── Crypto helpers ───────────────────────────────────────────────────────────
 
 func (s *Store) encrypt(plaintext string) (string, error) {
+	if s.gcm == nil {
+		return "", errors.New("ENCRYPTION_KEY is not set — cannot store API keys")
+	}
 	nonce := make([]byte, s.gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", err
@@ -161,6 +179,9 @@ func (s *Store) encrypt(plaintext string) (string, error) {
 }
 
 func (s *Store) decrypt(encoded string) (string, error) {
+	if s.gcm == nil {
+		return "", errors.New("ENCRYPTION_KEY is not set — cannot decrypt API keys")
+	}
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return "", fmt.Errorf("base64 decode: %w", err)

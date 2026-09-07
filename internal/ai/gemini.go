@@ -71,8 +71,8 @@ type geminiResponse struct {
 
 // ─── AnalyzeFile ──────────────────────────────────────────────────────────────
 
-func (p *geminiProvider) AnalyzeFile(ctx context.Context, filename, patch string, prCtx PRContext) ([]ReviewComment, error) {
-	prompt := BuildPrompt(filename, patch, 0, prCtx)
+func (p *geminiProvider) AnalyzeFile(ctx context.Context, in FileAnalysisInput) ([]ReviewComment, error) {
+	prompt := BuildPrompt(in, 0)
 
 	var comments []ReviewComment
 	err := withRetry(ctx, 3, func() error {
@@ -80,16 +80,16 @@ func (p *geminiProvider) AnalyzeFile(ctx context.Context, filename, patch string
 		if err != nil {
 			return err
 		}
-		comments = parseJSONComments(raw, filename, p.Name())
+		comments = parseJSONComments(raw, in.Filename, p.Name())
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("gemini: AnalyzeFile(%s): %w", filename, err)
+		return nil, fmt.Errorf("gemini: AnalyzeFile(%s): %w", in.Filename, err)
 	}
 
 	slog.Debug("AI analysis complete",
 		"provider", p.Name(),
-		"file", filename,
+		"file", in.Filename,
 		"comments", len(comments),
 	)
 	return comments, nil

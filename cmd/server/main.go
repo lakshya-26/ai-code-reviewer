@@ -40,20 +40,22 @@ func main() {
 	if cfg.DatabaseURL != "" {
 		db, err := storage.Open(cfg.DatabaseURL)
 		if err != nil {
-			slog.Error("failed to connect to database — per-installation config disabled", "err", err)
-		} else if cfg.EncryptionKey != "" {
+			slog.Error("failed to connect to database — review memory and per-installation config disabled", "err", err)
+		} else {
 			s, err := storage.NewStore(db, cfg.EncryptionKey)
 			if err != nil {
-				slog.Error("failed to initialise storage store — per-installation config disabled", "err", err)
+				slog.Error("failed to initialise storage store — review memory disabled", "err", err)
 			} else {
 				instStore = s
-				slog.Info("per-installation config enabled (PostgreSQL)")
+				if s.HasEncryption() {
+					slog.Info("per-installation config enabled (PostgreSQL)")
+				} else {
+					slog.Warn("ENCRYPTION_KEY not set — review memory enabled, /setup BYOK disabled")
+				}
 			}
-		} else {
-			slog.Warn("ENCRYPTION_KEY not set — per-installation config disabled even though DATABASE_URL is set")
 		}
 	} else {
-		slog.Info("DATABASE_URL not set — all reviews use server default provider")
+		slog.Info("DATABASE_URL not set — all reviews use server default provider, no incremental memory")
 	}
 
 	// ── GitHub client cache ───────────────────────────────────────────────────
@@ -80,7 +82,7 @@ func main() {
 
 	// Setup page — users land here after installing the GitHub App.
 	// Only available when the store is configured.
-	if instStore != nil {
+	if instStore != nil && instStore.HasEncryption() {
 		mux.HandleFunc("/setup", web.SetupHandler(instStore))
 		slog.Info("setup page available at /setup")
 	}

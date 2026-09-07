@@ -26,6 +26,10 @@ type Store interface {
 	GetOrCreate(ctx context.Context, installationID int64, accountLogin string) (*storage.Installation, error)
 	IncrementUsage(ctx context.Context, installationID int64) error
 	DecryptAPIKey(inst *storage.Installation) (string, error)
+	GetPRReview(ctx context.Context, installationID int64, repoFullName string, prNumber int) (*storage.PRReview, error)
+	UpsertPRReview(ctx context.Context, row storage.PRReview) error
+	ListPostedCommentKeys(ctx context.Context, repoFullName string, prNumber int) (map[storage.CommentKey]struct{}, error)
+	InsertPostedComments(ctx context.Context, comments []storage.PostedComment) error
 }
 
 // Reviewer orchestrates the full review pipeline for one pull request.
@@ -59,7 +63,7 @@ func New(clientCache *cache.ClientCache, provider ai.Provider, cfg *config.Confi
 //  5. Filter and cap the file list
 //  6. For each file: parse diff → call AI → validate comments
 //  7. Post a single GitHub review with all inline comments
-func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEvent) error {
+func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEvent) (err error) {
 	pr := event.PullRequest
 	repo := event.Repository
 	owner := repo.Owner.Login
@@ -102,6 +106,28 @@ func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEve
 	if err != nil {
 		return fmt.Errorf("getting github client for installation %d: %w", event.Installation.ID, err)
 	}
+
+	var issueCount int
+	checkID, checkErr := githubmodels.StartCheckRun(ctx, client, owner, repoName, commitSHA)
+	if checkErr != nil {
+		log.Warn("could not start check run — continuing without it", "err", checkErr)
+	}
+	defer func() {
+		if checkID == 0 {
+			return
+		}
+		conclusion := githubmodels.CheckConclusion(err, issueCount)
+		summary := "Review complete."
+		switch {
+		case err != nil:
+			summary = "Review finished with an error: " + err.Error()
+		case issueCount == 0:
+			summary = "No issues found."
+		default:
+			summary = fmt.Sprintf("Found %d issue(s).", issueCount)
+		}
+		_ = githubmodels.CompleteCheckRun(context.Background(), client, owner, repoName, checkID, conclusion, summary)
+	}()
 
 	// ── 2b. Per-installation AI provider ─────────────────────────────────────
 
@@ -179,20 +205,73 @@ func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEve
 
 	if len(reviewableFiles) == 0 {
 		log.Info("no reviewable files after filtering")
-		// Still post an approve/comment so the PR isn't left hanging.
 		return githubmodels.PostReview(ctx, client, owner, repoName, prNumber, commitSHA,
 			nil, repoCfg.ApproveOnClean)
+	}
+
+	// ── 5b. Incremental memory ────────────────────────────────────────────────
+
+	firstReview := true
+	var lastSHA string
+	if r.store != nil {
+		row, memErr := r.store.GetPRReview(ctx, event.Installation.ID, repo.FullName, prNumber)
+		if memErr != nil {
+			log.Warn("could not load PR review state", "err", memErr)
+		} else if row != nil && row.LastReviewedSHA != "" {
+			firstReview = false
+			lastSHA = row.LastReviewedSHA
+		}
+	}
+
+	var changed []githubmodels.ChangedFile
+	if !firstReview {
+		cmp, cmpErr := githubmodels.FilesChangedBetween(ctx, client, owner, repoName, lastSHA, commitSHA)
+		if cmpErr != nil {
+			log.Warn("compare commits failed — reviewing all PR files", "err", cmpErr)
+			changed = nil
+		} else {
+			changed = cmp
+		}
+		reviewableFiles = selectFilesForReview(reviewableFiles, changed, false)
+	}
+
+	if len(reviewableFiles) == 0 {
+		log.Info("no files to review since last SHA", "last_sha", lastSHA)
+		if r.store != nil {
+			_ = r.store.UpsertPRReview(ctx, storage.PRReview{
+				InstallationID:  event.Installation.ID,
+				RepoFullName:    repo.FullName,
+				PRNumber:        prNumber,
+				LastReviewedSHA: commitSHA,
+				CheckRunID:      checkID,
+			})
+		}
+		return nil
 	}
 
 	log.Info("reviewing files",
 		"reviewable", len(reviewableFiles),
 		"total_changed", len(prFiles),
+		"first_review", firstReview,
 	)
 
-	// ── 6. Analyse each file ──────────────────────────────────────────────────
+	guidelines := githubmodels.FetchGuidelines(ctx, client, owner, repoName, commitSHA, maxGuidelinesChars)
 
-	// Build PR context once — passed to every file analysis so the model
-	// understands the intent of the change.
+	repoMap := ""
+	if firstReview {
+		repoMap = buildRepoMap(ctx, client, owner, repoName, commitSHA, log)
+	}
+
+	posted := map[storage.CommentKey]struct{}{}
+	if r.store != nil {
+		keys, keysErr := r.store.ListPostedCommentKeys(ctx, repo.FullName, prNumber)
+		if keysErr != nil {
+			log.Warn("could not load posted comments", "err", keysErr)
+		} else if keys != nil {
+			posted = keys
+		}
+	}
+
 	prCtx := ai.PRContext{
 		Title:       pr.Title,
 		Description: pr.Body,
@@ -210,7 +289,6 @@ func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEve
 
 		fileLog := log.With("file", f.Filename)
 
-		// Parse the diff to extract valid line numbers.
 		parsed := parser.ParsePatch(f.Filename, f.Patch)
 		if len(parsed.Lines) == 0 {
 			fileLog.Debug("no added lines after parsing — skipping AI call")
@@ -219,25 +297,31 @@ func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEve
 
 		fileLog.Debug("parsed diff", "added_lines", len(parsed.Lines))
 
-		// Truncate patch before sending to AI if it exceeds the limit.
 		patch, wasTruncated := ai.TruncatePatch(f.Patch, r.cfg.MaxPatchChars)
 		if wasTruncated {
 			fileLog.Debug("patch truncated", "original_len", len(f.Patch), "truncated_len", len(patch))
 		}
 
-		// Call the AI provider — pass PR context for intent-aware review.
-		comments, err := provider.AnalyzeFile(ctx, f.Filename, patch, prCtx)
+		fileBody := fileBodyFor(ctx, client, owner, repoName, commitSHA, f, parsed, firstReview, fileLog)
+
+		comments, err := provider.AnalyzeFile(ctx, ai.FileAnalysisInput{
+			Filename:      f.Filename,
+			Patch:         patch,
+			FileBody:      fileBody,
+			Guidelines:    guidelines,
+			PathPrompt:    filter.PathPromptFor(f.Filename, repoCfg),
+			RepoMap:       repoMap,
+			PRContext:     prCtx,
+			MaxPatchChars: r.cfg.MaxPatchChars,
+		})
 		if err != nil {
-			// Partial success: log and continue with remaining files.
 			fileLog.Error("AI analysis failed — skipping file", "err", err)
 			continue
 		}
 
-		// Validate line numbers against the parsed diff and deduplicate.
 		comments = ai.ApplyFilters(comments, parsed.LineNumbers, f.Filename)
-
-		// Apply repo-level severity and category filters.
 		comments = applyCategoryAndSeverityFilters(comments, repoCfg)
+		comments = dropPostedComments(f.Filename, comments, posted)
 
 		if len(comments) > 0 {
 			fileReviews = append(fileReviews, ai.FileReview{
@@ -249,7 +333,6 @@ func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEve
 			fileLog.Debug("no issues found")
 		}
 
-		// Rate-limiting courtesy delay between AI calls.
 		if i < len(reviewableFiles)-1 {
 			select {
 			case <-time.After(interFileDelay):
@@ -261,6 +344,7 @@ func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEve
 	// ── 7. Post the review ────────────────────────────────────────────────────
 
 	totalIssues := ai.TotalComments(fileReviews)
+	issueCount = totalIssues
 	log.Info("posting review",
 		"files_reviewed", len(reviewableFiles),
 		"files_with_issues", len(fileReviews),
@@ -268,8 +352,6 @@ func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEve
 		"files_truncated", truncatedFiles,
 	)
 
-	// Use a fresh context for posting so a cancelled AI context doesn't also
-	// prevent the review from being posted (we still want partial results).
 	postCtx := context.Background()
 
 	if err := githubmodels.PostReview(
@@ -277,6 +359,21 @@ func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEve
 		fileReviews, repoCfg.ApproveOnClean,
 	); err != nil {
 		return fmt.Errorf("posting review: %w", err)
+	}
+
+	if r.store != nil {
+		if memErr := r.store.UpsertPRReview(postCtx, storage.PRReview{
+			InstallationID:  event.Installation.ID,
+			RepoFullName:    repo.FullName,
+			PRNumber:        prNumber,
+			LastReviewedSHA: commitSHA,
+			CheckRunID:      checkID,
+		}); memErr != nil {
+			log.Warn("could not save last reviewed SHA", "err", memErr)
+		}
+		if insErr := r.store.InsertPostedComments(postCtx, collectPostedComments(repo.FullName, prNumber, commitSHA, fileReviews)); insErr != nil {
+			log.Warn("could not save posted comment keys", "err", insErr)
+		}
 	}
 
 	return nil
