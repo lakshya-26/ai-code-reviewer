@@ -26,6 +26,9 @@ func TestFormatCommentBody_ErrorSeverity(t *testing.T) {
 	if !strings.Contains(body, c.Comment) {
 		t.Error("body should contain the comment text")
 	}
+	if !strings.Contains(body, reviewDisclaimer) {
+		t.Error("inline comments must include the first-pass disclaimer")
+	}
 }
 
 func TestFormatCommentBody_AllSeverities(t *testing.T) {
@@ -72,6 +75,12 @@ func TestBuildSummaryBody_WithIssues(t *testing.T) {
 	}
 	if !strings.Contains(body, emojiError) {
 		t.Error("body should contain error emoji")
+	}
+	if !strings.Contains(body, "Powered by DiffSense AI") {
+		t.Error("summary should include Powered by DiffSense AI")
+	}
+	if !strings.Contains(body, reviewDisclaimer) {
+		t.Error("summary must include the first-pass disclaimer")
 	}
 }
 
@@ -187,5 +196,18 @@ func TestFormatCommentBody_IncludesCopyPasteFence(t *testing.T) {
 	}
 	if !strings.Contains(body, "return err") {
 		t.Fatal("fix snippet missing")
+	}
+}
+
+func TestCleanReviewBody_IncludesDisclaimer(t *testing.T) {
+	body := cleanReviewBody()
+	if !strings.Contains(body, "No issues found") {
+		t.Fatal("clean review should say no issues found")
+	}
+	if !strings.Contains(body, "Powered by DiffSense AI") {
+		t.Fatal("clean review should include Powered by DiffSense AI")
+	}
+	if !strings.Contains(body, reviewDisclaimer) {
+		t.Fatal("clean review must include the first-pass disclaimer")
 	}
 }

@@ -23,6 +23,8 @@ const (
 	emojiError      = "🔴"
 	emojiWarning    = "🟡"
 	emojiSuggestion = "💡"
+
+	reviewDisclaimer = "DiffSense is a first pass. Ignore style nits; verify every bug/security flag."
 )
 
 // PostReview submits a single GitHub Pull Request Review containing all inline
@@ -54,7 +56,7 @@ func PostReview(
 		} else {
 			event = "COMMENT"
 		}
-		body = "✅ **DiffSense AI Code Review**: No issues found. Looks good to merge."
+		body = cleanReviewBody()
 	} else {
 		event = "COMMENT"
 		body = buildSummaryBody(totalIssues, filesReviewed, fileReviews)
@@ -150,6 +152,7 @@ func formatCommentBody(c ai.ReviewComment, filename string) string {
 		lang := ai.FenceLanguage(filename)
 		body += fmt.Sprintf("\n\n```%s\n%s\n```", lang, strings.TrimSpace(c.Fix))
 	}
+	body += reviewFooter()
 	return truncateString(body, maxCommentBodyBytes)
 }
 
@@ -190,9 +193,17 @@ func buildSummaryBody(totalIssues, filesReviewed int, reviews []ai.FileReview) s
 		}
 	}
 
-	sb.WriteString("\n<sub>Powered by DiffSense AI ⚡</sub>")
+	sb.WriteString(reviewFooter())
 
 	return sb.String()
+}
+
+func cleanReviewBody() string {
+	return "✅ **DiffSense AI Code Review**: No issues found. Looks good to merge." + reviewFooter()
+}
+
+func reviewFooter() string {
+	return "\n\n<sub>Powered by DiffSense AI</sub>\n<sub>" + reviewDisclaimer + "</sub>"
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -212,7 +223,7 @@ func countFilesWithComments(reviews []ai.FileReview) int {
 // Used for system messages like "free limit reached".
 func PostIssueComment(ctx context.Context, client *github.Client, owner, repo string, prNumber int, body string) error {
 	_, _, err := client.Issues.CreateComment(ctx, owner, repo, prNumber, &github.IssueComment{
-		Body: github.String(truncateString(body, maxCommentBodyBytes)),
+		Body: github.String(truncateString(body+reviewFooter(), maxCommentBodyBytes)),
 	})
 	if err != nil {
 		return fmt.Errorf("posting issue comment: %w", err)
