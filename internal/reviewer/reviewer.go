@@ -304,13 +304,18 @@ func (r *Reviewer) Review(ctx context.Context, event githubmodels.PullRequestEve
 
 		fileBody := fileBodyFor(ctx, client, owner, repoName, commitSHA, f, parsed, firstReview, fileLog)
 
+		fileRepoMap := ""
+		if i == 0 {
+			fileRepoMap = repoMap
+		}
+
 		comments, err := provider.AnalyzeFile(ctx, ai.FileAnalysisInput{
 			Filename:      f.Filename,
 			Patch:         patch,
 			FileBody:      fileBody,
 			Guidelines:    guidelines,
 			PathPrompt:    filter.PathPromptFor(f.Filename, repoCfg),
-			RepoMap:       repoMap,
+			RepoMap:       fileRepoMap,
 			PRContext:     prCtx,
 			MaxPatchChars: r.cfg.MaxPatchChars,
 		})

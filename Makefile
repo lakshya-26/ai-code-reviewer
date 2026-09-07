@@ -46,7 +46,7 @@ tidy:
 download-model:
 	bash scripts/download-model.sh
 
-## llm: Start the llama.cpp server natively (brew install llama.cpp first)
+## llm: Start llama.cpp (one 8192-token slot; --parallel 2 would split into 4096×2)
 llm:
 	@if [ ! -f models/qwen2.5-coder-7b-instruct-q5_k_m.gguf ]; then \
 		echo "Model not found. Run: make download-model"; exit 1; \
@@ -58,7 +58,7 @@ llm:
 		--port 8080 \
 		--ctx-size 8192 \
 		--threads $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4) \
-		--parallel 2
+		--parallel 1
 
 # ── Docker ────────────────────────────────────────────────────────────────────
 
