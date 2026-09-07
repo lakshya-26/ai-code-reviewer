@@ -19,7 +19,6 @@ type BuiltPrompt struct {
 }
 
 // BuildPrompt constructs the full system + user prompt for one file review.
-// BuildPrompt constructs the full system + user prompt for one file review.
 func BuildPrompt(in FileAnalysisInput, maxPatchChars int) BuiltPrompt {
 	if maxPatchChars <= 0 {
 		maxPatchChars = in.MaxPatchChars
@@ -27,12 +26,19 @@ func BuildPrompt(in FileAnalysisInput, maxPatchChars int) BuiltPrompt {
 	if maxPatchChars <= 0 {
 		maxPatchChars = maxPatchCharsDefault
 	}
+	if maxPatchChars > 6000 {
+		maxPatchChars = 6000
+	}
 
 	patch := in.Patch
 	truncated := false
 	if len(patch) > maxPatchChars {
 		patch, truncated = TruncatePatch(patch, maxPatchChars)
 	}
+
+	in.FileBody, _ = TruncatePatch(in.FileBody, 4000)
+	in.Guidelines, _ = TruncatePatch(in.Guidelines, 2000)
+	in.RepoMap, _ = TruncatePatch(in.RepoMap, 2500)
 
 	return BuiltPrompt{
 		System:    buildSystemPrompt(in.PathPrompt),
