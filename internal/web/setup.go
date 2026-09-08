@@ -1,7 +1,8 @@
-// Package web provides the HTTP handlers for the public-facing setup UI.
-// Users land here after installing the GitHub App via the GitHub-controlled
-// redirect (installation_id is injected by GitHub, so only the installer
-// arrives on this page naturally).
+// Package web provides public HTTP pages served by the same process as the
+// webhook: the landing page at GET / and the post-install setup UI at /setup.
+//
+// GitHub redirects installers to /setup with installation_id, so only the
+// installer arrives on that page naturally.
 package web
 
 import (
@@ -41,6 +42,7 @@ func SetupHandler(store Store) http.HandlerFunc {
 // ─── GET /setup ───────────────────────────────────────────────────────────────
 
 type setupPageData struct {
+	NeedID         bool
 	InstallationID int64
 	AccountLogin   string
 	Provider       string
@@ -48,7 +50,7 @@ type setupPageData struct {
 	HasKey         bool
 	FreeUsed       int
 	FreeLimit      int
-	UsagePct       int  // 0-100 for the progress bar
+	UsagePct       int // 0-100 for the progress bar
 	AtLimit        bool
 	Success        string
 	Error          string
@@ -71,7 +73,10 @@ var supportedProviders = []providerOption{
 func handleSetupGet(w http.ResponseWriter, r *http.Request, store Store) {
 	installationID, err := parseInstallationID(r)
 	if err != nil {
-		http.Error(w, "missing or invalid installation_id", http.StatusBadRequest)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if execErr := setupTmpl.Execute(w, setupPageData{NeedID: true}); execErr != nil {
+			slog.Error("setup: render installation-id form", "err", execErr)
+		}
 		return
 	}
 
@@ -206,7 +211,7 @@ const setupHTML = `<!DOCTYPE html>
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0d1117;color:#e6edf3;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
   .card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:40px;width:100%;max-width:520px}
   .logo{display:flex;align-items:center;gap:12px;margin-bottom:32px}
-  .logo-icon{width:40px;height:40px;background:linear-gradient(135deg,#238636,#1a7f37);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px}
+  .logo-icon{width:40px;height:40px;flex-shrink:0;display:block;border-radius:10px}
   .logo h1{font-size:20px;font-weight:700;color:#e6edf3}
   .logo p{font-size:13px;color:#8b949e;margin-top:2px}
   .usage-bar{background:#21262d;border:1px solid #30363d;border-radius:8px;padding:16px;margin-bottom:24px}
@@ -244,13 +249,29 @@ const setupHTML = `<!DOCTYPE html>
 <body>
 <div class="card">
   <div class="logo">
-    <div class="logo-icon">🔍</div>
+    <img class="logo-icon" src="/logo.svg" width="40" height="40" alt="">
     <div>
       <h1>DiffSense AI</h1>
       <p>GitHub App Configuration</p>
     </div>
   </div>
 
+  {{if .NeedID}}
+  <p class="section-title">Find your installation</p>
+  <p class="hint" style="margin-bottom:16px">GitHub redirects here after you install. If you skipped that, paste the installation ID from
+    Settings → Applications → DiffSense AI (the number at the end of the URL).</p>
+  <form method="GET" action="/setup">
+    <div class="form-group">
+      <label for="installation_id">Installation ID</label>
+      <input type="text" name="installation_id" id="installation_id" inputmode="numeric" pattern="[0-9]+" required placeholder="e.g. 12345678" autocomplete="off">
+    </div>
+    <button type="submit" class="btn btn-primary">Continue</button>
+  </form>
+  <div class="footer">
+    No ID yet? <a href="https://github.com/apps/diffsense-ai">Install the GitHub App</a>
+    · <a href="/">Home</a>
+  </div>
+  {{else}}
   {{if .Success}}<div class="alert success">✓ {{.Success}}</div>{{end}}
   {{if .Error}}<div class="alert error">✗ {{.Error}}</div>{{end}}
 
@@ -320,7 +341,9 @@ const setupHTML = `<!DOCTYPE html>
     Installation #{{.InstallationID}}
     {{if .AccountLogin}} · <strong>{{.AccountLogin}}</strong>{{end}}
     · <a href="https://github.com/apps/diffsense-ai" target="_blank">App Settings</a>
+    · <a href="/">Home</a>
   </div>
+  {{end}}
 </div>
 </body>
 </html>

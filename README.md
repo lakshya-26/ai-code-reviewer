@@ -30,9 +30,11 @@ This repo uses DiffSense AI to review its own PRs. Check out real AI reviews sta
 
 ## 🚀 Try It Live
 
+The same Go server serves a one-page landing site at `/` (no extra frontend). Webhooks stay at `/webhook`, health at `/health`, and BYOK settings at `/setup`.
+
 ### Install the GitHub App
 
-1. Go to **[github.com/apps/diffsense-ai](https://github.com/apps/diffsense-ai)**
+1. Go to **[github.com/apps/diffsense-ai](https://github.com/apps/diffsense-ai)** (or click **Install** on the landing page)
 2. Click **Install** → select your repo(s)
 3. Open a Pull Request — the bot will automatically review it within seconds
 
@@ -270,7 +272,10 @@ FREE_REVIEWS_LIMIT              = 100
 │   ├── parser/diff.go          # Unified diff parser
 │   ├── filter/                 # File + config filtering
 │   ├── storage/                # PostgreSQL (installations + review memory)
-│   ├── web/setup.go            # /setup settings page
+│   ├── web/                    # Public pages (same process as the API)
+│   │   ├── home.go             # GET / landing page
+│   │   ├── home.html           # CodeRabbit-style hero markup
+│   │   └── setup.go            # /setup settings page
 │   └── cache/token.go          # Installation client cache
 ├── config/default.yml          # Default reviewer settings
 ├── Dockerfile                  # Multi-stage build
