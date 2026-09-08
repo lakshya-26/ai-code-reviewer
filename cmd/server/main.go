@@ -77,6 +77,9 @@ func main() {
 
 	// ── HTTP server ───────────────────────────────────────────────────────────
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", web.HomeHandler())
+	mux.HandleFunc("/logo.svg", web.LogoHandler())
+	mux.HandleFunc("/favicon.svg", web.LogoHandler())
 	mux.HandleFunc("/webhook", githubhandler.NewWebhookHandler(cfg.WebhookSecret, pool))
 	mux.HandleFunc("/health", githubhandler.NewHealthHandler())
 

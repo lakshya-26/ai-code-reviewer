@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="DiffSense">
+  <rect width="64" height="64" rx="16" fill="#7CFFB2"/>
+
+  <!-- ear tufts -->
+  <path fill="#052e16" d="M18 26L12 5l20 18z"/>
+  <path fill="#052e16" d="M46 26l6-21-20 18z"/>
+  <path fill="#9dffc9" d="M20 22l-2-11 11 9z"/>
+  <path fill="#9dffc9" d="M44 22l2-11-11 9z"/>
+
+  <!-- body -->
+  <ellipse cx="32" cy="56" rx="16" ry="8" fill="#052e16"/>
+  <!-- feet -->
+  <ellipse cx="24" cy="61.2" rx="4.2" ry="1.8" fill="#0a3d28"/>
+  <ellipse cx="40" cy="61.2" rx="4.2" ry="1.8" fill="#0a3d28"/>
+
+  <!-- head -->
+  <ellipse cx="32" cy="36" rx="22" ry="20" fill="#052e16"/>
+
+  <!-- white face (owl disks) -->
+  <ellipse cx="22.5" cy="36" rx="11.5" ry="12.5" fill="#f4fff8"/>
+  <ellipse cx="41.5" cy="36" rx="11.5" ry="12.5" fill="#f4fff8"/>
+
+  <!-- eyes -->
+  <circle cx="22.5" cy="35.5" r="6.2" fill="#052e16"/>
+  <circle cx="41.5" cy="35.5" r="6.2" fill="#052e16"/>
+  <circle cx="24.4" cy="33.4" r="2.1" fill="#fff"/>
+  <circle cx="43.4" cy="33.4" r="2.1" fill="#fff"/>
+  <circle cx="21" cy="37.4" r="1.05" fill="#7CFFB2"/>
+  <circle cx="40" cy="37.4" r="1.05" fill="#7CFFB2"/>
+
+  <!-- beak -->
+  <path fill="#ffbf47" d="M32 40.5L26.8 49.2Q32 52.2 37.2 49.2Z"/>
+
+  <!-- wing hints -->
+  <ellipse cx="12.5" cy="52" rx="5" ry="7" fill="#052e16"/>
+  <ellipse cx="51.5" cy="52" rx="5" ry="7" fill="#052e16"/>
+</svg>

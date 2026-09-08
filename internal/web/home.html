@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DiffSense AI — First-pass code review for GitHub PRs</title>
+<meta name="description" content="DiffSense AI reviews pull requests automatically: inline comments on bugs, security issues, and risky diffs — before a senior looks.">
+<meta name="theme-color" content="#09080c">
+<link rel="icon" type="image/svg+xml" href="/logo.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #09080c;
+    --bg-deep: #050409;
+    --surface: #0f0d14;
+    --surface-2: #16131d;
+    --text: #ffffff;
+    --text-2: #c9c5d2;
+    --text-3: #8b8794;
+    --text-4: #5e5a68;
+    --border: #262433;
+    --border-strong: #36333f;
+    --accent: #7CFFB2;
+    --accent-dim: rgba(124, 255, 178, 0.14);
+    --cta: #ffffff;
+    --cta-hover: #ededed;
+    --cta-text: #09080c;
+    --add: #3fb950;
+    --add-bg: rgba(63, 185, 80, 0.12);
+    --del: #f85149;
+    --radius: 4px;
+    --radius-lg: 16px;
+    --max: 1120px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    line-height: 1.5;
+    overflow-x: hidden;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: var(--max); margin: 0 auto; padding: 0 24px; }
+
+  header {
+    position: sticky; top: 0; z-index: 20;
+    backdrop-filter: blur(16px);
+    background: rgba(9, 8, 12, 0.72);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .nav {
+    display: flex; align-items: center; justify-content: space-between;
+    height: 64px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; color: var(--text); text-decoration: none; }
+  .brand:hover { text-decoration: none; }
+  .logo-mark { width: 32px; height: 32px; display: block; flex-shrink: 0; border-radius: 8px; }
+  .logo-mark.sm { width: 22px; height: 22px; border-radius: 6px; }
+  .nav-actions { display: flex; align-items: center; gap: 16px; }
+  .nav-link { color: var(--text-2); font-size: 14px; font-weight: 600; }
+  .nav-link:hover { color: var(--text); text-decoration: none; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--cta); color: var(--cta-text);
+    height: 40px; padding: 0 16px;
+    border-radius: var(--radius);
+    font-weight: 600; font-size: 14px;
+  }
+  .btn:hover { background: var(--cta-hover); text-decoration: none; }
+  .btn-lg { height: 56px; padding: 0 22px; font-size: 15px; }
+  .btn-ghost {
+    display: inline-flex; align-items: center; justify-content: center;
+    height: 56px; padding: 0 22px;
+    border: 1px solid var(--border-strong); border-radius: var(--radius);
+    color: var(--text); font-weight: 600; font-size: 15px;
+  }
+  .btn-ghost:hover { border-color: var(--text-3); text-decoration: none; }
+  .btn-ghost.sm { height: 40px; padding: 0 16px; font-size: 14px; }
+
+  .hero {
+    display: grid;
+    grid-template-columns: 1.05fr 0.95fr;
+    gap: 48px;
+    align-items: center;
+    padding: 96px 0 72px;
+  }
+  .kicker {
+    font-size: 13px; font-weight: 600; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text-3); margin-bottom: 20px;
+  }
+  h1 {
+    font-size: clamp(36px, 5.4vw, 72px);
+    font-weight: 600; letter-spacing: -0.035em; line-height: 1.02;
+  }
+  h1 .muted { color: var(--text-3); font-weight: 500; }
+  .rotator {
+    display: block; color: var(--accent); min-height: 1.05em;
+  }
+  .lede {
+    margin-top: 22px; font-size: 18px; color: var(--text-2); max-width: 38ch; line-height: 1.45;
+  }
+  .cta-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-top: 32px; }
+  .ghost { color: var(--text-3); font-size: 14px; }
+
+  .steps {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 8px; margin-top: 56px; padding-top: 28px;
+    border-top: 1px solid var(--border);
+  }
+  .step { padding: 8px 8px 0 0; }
+  .step b {
+    display: block; font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12px; color: var(--text-4); font-weight: 500; margin-bottom: 6px;
+  }
+  .step span { font-size: 14px; color: var(--text-2); font-weight: 500; }
+
+  .mock {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: 0 40px 80px rgba(0,0,0,0.45);
+  }
+  .mock-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-3); font-size: 12px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); }
+  .mock-pr { padding: 16px 16px 8px; font-size: 13px; color: var(--text-2); }
+  .pr-title { color: var(--text); font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .comment {
+    margin: 12px; padding: 14px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+  .who { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 12px; color: var(--text-3); }
+  .avatar {
+    width: 22px; height: 22px; border-radius: 6px;
+    overflow: hidden; display: grid; place-items: center;
+    flex-shrink: 0;
+  }
+  .avatar.human {
+    border-radius: 50%;
+    background: #3b82f6; color: #fff;
+    font-size: 9px; font-weight: 800;
+  }
+  .who strong { color: var(--text); font-weight: 600; }
+  .badge {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--accent);
+    background: var(--accent-dim); padding: 2px 6px; border-radius: 999px;
+  }
+  .comment p { font-size: 13.5px; color: var(--text-2); margin-bottom: 10px; }
+  pre {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11.5px; line-height: 1.55;
+    background: var(--bg-deep); border-radius: 8px; padding: 10px 12px;
+    overflow: hidden;
+  }
+  .del { color: #ffb4b0; background: var(--del); background: rgba(248,81,73,0.12); display: block; margin: 0 -12px; padding: 0 12px; }
+  .add { color: #aff5b4; background: var(--add-bg); display: block; margin: 0 -12px; padding: 0 12px; }
+
+  .stats {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 1px; background: var(--border);
+    border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+    margin: 8px 0 88px;
+  }
+  .stat { background: var(--surface); padding: 28px 24px; }
+  .stat b { display: block; font-size: 22px; font-weight: 600; letter-spacing: -0.03em; margin-bottom: 6px; }
+  .stat span { font-size: 13px; color: var(--text-3); }
+
+  section.block { padding: 8px 0 96px; }
+  .block h2 {
+    font-size: clamp(28px, 4vw, 40px);
+    font-weight: 600; letter-spacing: -0.025em; line-height: 1.15;
+    max-width: 16ch; margin-bottom: 16px;
+  }
+  .block > .lede { margin-top: 0; margin-bottom: 36px; }
+  .bento {
+    display: grid; grid-template-columns: 1.2fr 1fr; gap: 14px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 28px;
+  }
+  .card.wide { grid-column: 1 / -1; }
+  .card h3 { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+  .card p { color: var(--text-3); font-size: 15px; }
+  .num {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12px; color: var(--accent); margin-bottom: 18px;
+  }
+  .id-form {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; margin-top: 24px;
+  }
+  .id-form input {
+    flex: 1 1 180px; min-width: 0;
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+    color: var(--text); padding: 0 14px; height: 48px; font-size: 15px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+  }
+  .id-form input:focus { outline: none; border-color: var(--accent); }
+  .id-form .btn { height: 48px; border: none; cursor: pointer; font-family: inherit; }
+  .howto { margin-top: 20px; padding-left: 20px; color: var(--text-3); font-size: 15px; }
+  .howto li { margin: 8px 0; }
+  .howto strong { color: var(--text); }
+
+  .cta-band {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 56px 40px;
+    text-align: center;
+    margin-bottom: 80px;
+  }
+  .cta-band h2 { max-width: none; margin: 0 auto 12px; }
+  .cta-band .lede { margin: 0 auto 28px; max-width: 42ch; }
+  .note { font-size: 13px; color: var(--text-4); margin-top: 18px; }
+
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 28px 0 48px;
+    display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    font-size: 13px; color: var(--text-4);
+  }
+  footer a { color: var(--text-3); }
+
+  @media (max-width: 900px) {
+    .hero, .bento, .stats, .steps { grid-template-columns: 1fr; }
+    .hero { padding: 56px 0 40px; gap: 36px; }
+    .stats { margin-bottom: 64px; }
+    .cta-band { padding: 40px 22px; }
+    .steps { grid-template-columns: 1fr 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/">
+      <img class="logo-mark" src="/logo.svg" width="32" height="32" alt="">
+      DiffSense
+    </a>
+    <div class="nav-actions">
+      <a class="nav-link" href="/setup">Setup</a>
+      <a class="btn" href="{{APP_URL}}">Install on GitHub</a>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="hero">
+    <div>
+      <p class="kicker">GitHub App</p>
+      <h1>
+        <span class="muted">The first pass isn’t you.</span>
+        <span class="rotator" id="rotator">It’s reviewing the PR.</span>
+      </h1>
+      <p class="lede">AI-written code outpaces humans. DiffSense comments on the line — bugs, security, risky diffs — so a senior spends time on the hard parts.</p>
+      <div class="cta-row">
+        <a class="btn btn-lg" href="{{APP_URL}}">Install on GitHub</a>
+        <a class="btn-ghost" href="/setup">Open setup</a>
+      </div>
+      <div class="steps">
+        <div class="step"><b>01</b><span>Install the GitHub App on a repo</span></div>
+        <div class="step"><b>02</b><span>Optional: add your API key in Setup</span></div>
+        <div class="step"><b>03</b><span>Open a pull request — review lands on the diff</span></div>
+        <div class="step"><b>04</b><span>A human still owns the merge</span></div>
+      </div>
+    </div>
+    <aside class="mock" aria-hidden="true">
+      <div class="mock-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span> acme/api · Pull request #482</div>
+      <div class="mock-pr">
+        <div class="pr-title">Invalidate cache after project update</div>
+        opened just now
+      </div>
+      <div class="comment">
+        <div class="who">
+          <span class="avatar">
+            <img class="logo-mark sm" src="/logo.svg" width="22" height="22" alt="">
+          </span>
+          <strong>diffsense-ai</strong> <span class="badge">bot</span> reviewed 2m ago
+        </div>
+        <p>The record updates, but the stale project key remains in Redis.</p>
+        <pre><span class="del">- await db.project.update(input)</span><span class="add">+ await updateProjectAndInvalidate(input)</span></pre>
+      </div>
+      <div class="comment">
+        <div class="who"><span class="avatar human">YO</span><strong>you</strong> replied now</div>
+        <p>First pass caught it. Fixing in the next commit.</p>
+      </div>
+    </aside>
+  </section>
+
+  <div class="stats">
+    <div class="stat"><b>Inline</b><span>Comments land on the added line</span></div>
+    <div class="stat"><b>Incremental</b><span>Later pushes skip repeats</span></div>
+    <div class="stat"><b>Bring your key</b><span>Groq, OpenAI, Claude, Gemini, Grok</span></div>
+    <div class="stat"><b>Check Run</b><span>In progress, then success or neutral</span></div>
+  </div>
+
+  <section class="block">
+    <h2>Reviews that stay on the diff.</h2>
+    <p class="lede">Not a dashboard. DiffSense lives where the change is — GitHub pull requests.</p>
+    <div class="bento">
+      <article class="card">
+        <div class="num">01 — Inline</div>
+        <h3>Comments on the exact line</h3>
+        <p>Findings post as a review on the added line, with a copy-paste snippet when a fix is obvious. No GitHub suggestion blocks that fail to apply.</p>
+      </article>
+      <article class="card">
+        <div class="num">02 — Incremental</div>
+        <h3>New commits, not old noise</h3>
+        <p>Later pushes re-review only what changed since the last SHA. Duplicate (path, line, category) findings are skipped.</p>
+      </article>
+      <article class="card">
+        <div class="num">03 — Your model</div>
+        <h3>Shared tier or your own key</h3>
+        <p>Start on the shared Groq free tier. After install, the setup page lets you bring OpenAI, Claude, Gemini, or Grok.</p>
+      </article>
+      <article class="card">
+        <div class="num">04 — Honest bar</div>
+        <h3>A first pass, not a senior</h3>
+        <p>Every comment says so. Ignore style nits; verify every bug and security flag before you merge.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="block" id="setup">
+    <h2>Setup: free tier or your own key.</h2>
+    <p class="lede">After install, open Setup to paste an API key. Skip it and you still get 100 free reviews on the shared Groq tier.</p>
+    <div class="card wide">
+      <div class="num">02 — Setup</div>
+      <h3>Add a provider key (optional)</h3>
+      <p>GitHub usually sends you here right after you install. If you closed that tab, open Setup and enter your installation ID — then pick Groq, OpenAI, Claude, Gemini, or Grok and paste the key.</p>
+      <ol class="howto">
+        <li><strong>Install</strong> DiffSense on the repositories you want reviewed.</li>
+        <li><strong>Find the installation ID</strong> in the GitHub URL: Settings → Applications → DiffSense AI. The number at the end of <code style="color:var(--text-2)">github.com/settings/installations/12345678</code> is the ID.</li>
+        <li><strong>Paste the ID</strong> below, choose a provider, and save your API key. Leave it blank to stay on the free tier.</li>
+      </ol>
+      <form class="id-form" method="get" action="/setup">
+        <input type="text" name="installation_id" inputmode="numeric" pattern="[0-9]+" required placeholder="Installation ID" aria-label="GitHub installation ID" autocomplete="off">
+        <button class="btn" type="submit">Continue to setup</button>
+      </form>
+      <p class="note" style="margin-top:16px">No ID yet? <a href="{{APP_URL}}">Install the app first</a> — GitHub redirects to Setup automatically.</p>
+    </div>
+  </section>
+
+  <section class="cta-band">
+    <h2>Install it on a repo. Open a PR.</h2>
+    <p class="lede">Install on a repo, then optionally add your key on Setup. Same Go process as the webhook — no extra frontend server.</p>
+    <div class="cta-row" style="justify-content:center;margin-top:0;margin-bottom:8px">
+      <a class="btn btn-lg" href="{{APP_URL}}">Install the GitHub App</a>
+      <a class="btn-ghost" href="/setup">Open setup</a>
+    </div>
+    <p class="note">DiffSense is a first pass. Ignore style nits; verify every bug/security flag.</p>
+  </section>
+</main>
+
+<footer class="wrap">
+  <span>DiffSense AI</span>
+  <span><a href="https://github.com/lakshya-26/ai-code-reviewer">Source</a> · <a href="/setup">Setup</a> · <a href="{{APP_URL}}">GitHub App</a></span>
+</footer>
+<script>
+(function () {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  var el = document.getElementById("rotator");
+  var words = ["It’s reviewing the PR.", "It’s catching the bug.", "It’s flagging the risk."];
+  var i = 0;
+  setInterval(function () {
+    i = (i + 1) % words.length;
+    el.textContent = words[i];
+  }, 2600);
+})();
+</script>
+</body>
+</html>
